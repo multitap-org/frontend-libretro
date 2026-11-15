@@ -40,12 +40,49 @@ static void destroy_texture(CoreSession* session, AppShell* shell)
     session->uploaded_serial = 0;
 }
 
-// Makes sure the texture can hold width x height. Recreating it waits for the
-// GPU, so it's sized to the core's maximum geometry up front.
-static bool ensure_texture(CoreSession* session, AppShell* shell, uint32_t width, uint32_t height)
+// The texture format for a libretro pixel format (vk_texture.h: the bit
+// layouts match, little-endian).
+static VkFormat texture_format_for(retro_pixel_format format)
+{
+    switch (format)
+    {
+        case RETRO_PIXEL_FORMAT_RGB565:   return VK_FORMAT_R5G6B5_UNORM_PACK16;
+        case RETRO_PIXEL_FORMAT_0RGB1555: return VK_FORMAT_A1R5G5B5_UNORM_PACK16;
+        default:                          return VK_FORMAT_B8G8R8A8_UNORM;
+    }
+}
+
+// Whether the host should keep frames in the core's own format (uploaded as
+// is) or convert them to XRGB8888 (the software fallback): native when this
+// GPU takes all three formats. MULTITAP_CONVERT_PIXELS=1 forces the fallback
+// (to test it, or compare the two).
+static bool use_native_pixel_formats(const AppShell* shell)
+{
+    const char* force = SDL_getenv("MULTITAP_CONVERT_PIXELS");
+    if (force != nullptr && std::strcmp(force, "1") == 0)
+    {
+        return false;
+    }
+    return streaming_texture_format_supported(&shell->vulkan, VK_FORMAT_R5G6B5_UNORM_PACK16) &&
+           streaming_texture_format_supported(&shell->vulkan, VK_FORMAT_A1R5G5B5_UNORM_PACK16) &&
+           streaming_texture_format_supported(&shell->vulkan, VK_FORMAT_B8G8R8A8_UNORM);
+}
+
+// The texture format the host's frames come in: the core's format when the
+// host keeps it native, XRGB8888-with-alpha (B8G8R8A8) when it converts.
+static VkFormat frame_texture_format(const LibretroHost* host)
+{
+    return host->native_pixel_formats ? texture_format_for(host->pixel_format) : STREAMING_TEXTURE_FORMAT;
+}
+
+// Makes sure the texture can hold width x height in `format`. Recreating it
+// waits for the GPU, so it's sized to the core's maximum geometry up front
+// (and the format only changes if the core changes its pixel format).
+static bool ensure_texture(CoreSession* session, AppShell* shell, uint32_t width, uint32_t height, VkFormat format)
 {
     StreamingTexture* texture = &session->texture;
-    if (texture->image != VK_NULL_HANDLE && width <= texture->capacity_width && height <= texture->capacity_height)
+    if (texture->image != VK_NULL_HANDLE && width <= texture->capacity_width && height <= texture->capacity_height &&
+        texture->format == format)
     {
         return true;
     }
@@ -53,13 +90,15 @@ static bool ensure_texture(CoreSession* session, AppShell* shell, uint32_t width
     uint32_t new_height = height > texture->capacity_height ? height : texture->capacity_height;
 
     destroy_texture(session, shell);
-    if (!streaming_texture_create(texture, &shell->vulkan, new_width, new_height))
+    // Opaque: a core's picture has no alpha (native frames leave those bits unused).
+    if (!streaming_texture_create_format(texture, &shell->vulkan, new_width, new_height, format, true))
     {
         set_message(session, "Could not create a %ux%u texture for the core's video", new_width, new_height);
         return false;
     }
     session->texture_id = debug_ui_add_texture(texture->view);
-    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Core video texture: %ux%u", new_width, new_height);
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Core video texture: %ux%u, %s", new_width, new_height,
+                session->host->native_pixel_formats ? "the core's own pixel format" : "converted to XRGB8888");
     return true;
 }
 
@@ -67,6 +106,14 @@ void core_session_upload_video(CoreSession* session, AppShell* shell)
 {
     const LibretroVideoFrame* video = &session->host->video;
     if (!core_session_running(session) || video->pixels == nullptr || video->serial == session->uploaded_serial)
+    {
+        return;
+    }
+    // A frame in another format than the texture (the core changed it) waits
+    // for run_frame's ensure_texture.
+    if (video->bytes_per_pixel != session->texture.bytes_per_pixel ||
+        (session->host->native_pixel_formats ? texture_format_for(video->format) : STREAMING_TEXTURE_FORMAT) !=
+            session->texture.format)
     {
         return;
     }
@@ -251,6 +298,7 @@ bool core_session_start(CoreSession* session, AppShell* shell, const char* core_
     config.system_directory = session->system_directory;
     config.saved_options = saved.data();
     config.saved_option_count = static_cast<uint32_t>(saved.size());
+    config.native_pixel_formats = use_native_pixel_formats(shell);
     if (!libretro_host_load_core(session->host, core_path, &config))
     {
         set_message(session, "Could not load the core %s (see the log)", core_path);
@@ -281,7 +329,7 @@ bool core_session_start(CoreSession* session, AppShell* shell, const char* core_
         width = 640;
         height = 480;
     }
-    if (!ensure_texture(session, shell, width, height))
+    if (!ensure_texture(session, shell, width, height, frame_texture_format(session->host)))
     {
         libretro_host_unload_core(session->host);
         return false;
@@ -486,7 +534,7 @@ CoreSessionFrame core_session_run_frame(CoreSession* session, AppShell* shell, c
     const LibretroVideoFrame* video = &session->host->video;
     if (video->width > 0 && video->height > 0)
     {
-        ensure_texture(session, shell, video->width, video->height);
+        ensure_texture(session, shell, video->width, video->height, frame_texture_format(session->host));
     }
     return CoreSessionFrame::ran;
 }
@@ -530,9 +578,20 @@ static bool save_thumbnail(const LibretroVideoFrame* video, const StateThumbnail
         top = 0;
     }
 
+    // The frame as the host keeps it (converted or the core's own format);
+    // SDL converts while blitting. XRGB1555 is libretro's 0RGB1555.
+    SDL_PixelFormat frame_format = SDL_PIXELFORMAT_XRGB8888;
+    if (video->format == RETRO_PIXEL_FORMAT_RGB565)
+    {
+        frame_format = SDL_PIXELFORMAT_RGB565;
+    }
+    else if (video->format == RETRO_PIXEL_FORMAT_0RGB1555)
+    {
+        frame_format = SDL_PIXELFORMAT_XRGB1555;
+    }
     SDL_Surface* frame = SDL_CreateSurfaceFrom(static_cast<int>(video->width), static_cast<int>(video->height),
-                                               SDL_PIXELFORMAT_XRGB8888, video->pixels,
-                                               static_cast<int>(video->width * 4));
+                                               frame_format, video->pixels,
+                                               static_cast<int>(video->width * video->bytes_per_pixel));
     SDL_Surface* cropped = SDL_CreateSurface(static_cast<int>(width), static_cast<int>(height), SDL_PIXELFORMAT_XRGB8888);
     SDL_Surface* scaled = nullptr;
     bool ok = false;
