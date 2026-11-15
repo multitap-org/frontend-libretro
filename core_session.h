@@ -95,6 +95,13 @@ struct CoreSession
     bool     fast_forward      = false;
     bool     fast_forward_held = false;
 
+    // The frontend's own input layer instead of the fixed controls
+    // (core_session_set_pads): then the fixed controls, the session's
+    // gamepad and the Space key are left alone; fast_forward_held is the
+    // frontend's to set.
+    bool               external_pads = false;
+    LibretroInputState pads          = {};   // joypad_buttons and analog only
+
     CoreSessionStats stats = {};      // reset by every start
     uint32_t state_slot = LIBRETRO_STATE_SLOT_FIRST;   // 1..9
 
@@ -133,6 +140,11 @@ bool core_session_running(const CoreSession* session);
 // frontend should ignore it. `keyboard_for_joypad`: false while the frontend's
 // own UI wants the keyboard (a text field has focus).
 bool core_session_handle_event(CoreSession* session, AppShell* shell, const SDL_Event* event, bool keyboard_for_joypad);
+
+// The RetroPad of every port, from the frontend's input layer (sets
+// external_pads). Call before core_session_run_frame.
+void core_session_set_pads(CoreSession* session, const uint16_t buttons[LIBRETRO_MAX_PORTS],
+                           const int16_t analog[LIBRETRO_MAX_PORTS][2][2]);
 
 // Once per loop, before running frames: timing mode (from the user's choice,
 // the core's fps and the display), vsync on/off and the audio speed.

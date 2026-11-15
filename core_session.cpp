@@ -355,11 +355,15 @@ bool core_session_handle_event(CoreSession* session, AppShell* shell, const SDL_
         return true;
     }
     bool keyboard_enabled = keyboard_for_joypad && !session->keyboard.game_focus;
-    fixed_input_handle_event(&session->fixed_input, event, keyboard_enabled, session->gamepad);
+    if (!session->external_pads)
+    {
+        fixed_input_handle_event(&session->fixed_input, event, keyboard_enabled, session->gamepad);
+    }
 
     // Fast forward while Space is held. A key-up always counts, so focus moving
     // to a text field mid-press can't leave it stuck on.
-    if ((event->type == SDL_EVENT_KEY_DOWN || event->type == SDL_EVENT_KEY_UP) && event->key.scancode == SDL_SCANCODE_SPACE)
+    if (!session->external_pads && (event->type == SDL_EVENT_KEY_DOWN || event->type == SDL_EVENT_KEY_UP) &&
+        event->key.scancode == SDL_SCANCODE_SPACE)
     {
         if (event->type == SDL_EVENT_KEY_UP)
         {
@@ -387,7 +391,7 @@ bool core_session_handle_event(CoreSession* session, AppShell* shell, const SDL_
             audio_output_devices_changed(&session->audio);
         }
     }
-    if (event->type == SDL_EVENT_GAMEPAD_ADDED && session->gamepad == nullptr)
+    if (event->type == SDL_EVENT_GAMEPAD_ADDED && session->gamepad == nullptr && !session->external_pads)
     {
         session->gamepad = SDL_OpenGamepad(event->gdevice.which);
     }
@@ -427,6 +431,21 @@ void core_session_update(CoreSession* session, AppShell* shell)
     audio_output_configure(&session->audio, &session->audio_config);
     audio_output_set_speed(&session->audio, frame_timing_audio_ratio(&session->timing),
                            session->audio_config.rate_control);
+}
+
+void core_session_set_pads(CoreSession* session, const uint16_t buttons[LIBRETRO_MAX_PORTS],
+                           const int16_t analog[LIBRETRO_MAX_PORTS][2][2])
+{
+    session->external_pads = true;
+    for (unsigned port = 0; port < LIBRETRO_MAX_PORTS; port++)
+    {
+        session->pads.joypad_buttons[port] = buttons[port];
+        for (int stick = 0; stick < 2; stick++)
+        {
+            session->pads.analog[port][stick][0] = analog[port][stick][0];
+            session->pads.analog[port][stick][1] = analog[port][stick][1];
+        }
+    }
 }
 
 bool core_session_fast_forwarding(const CoreSession* session)
@@ -473,8 +492,23 @@ CoreSessionFrame core_session_run_frame(CoreSession* session, AppShell* shell, c
     session->step_once = false;
 
     LibretroInputState input = {};
-    fixed_input_read(&session->fixed_input, &input, keyboard_for_joypad && !session->keyboard.game_focus,
-                     session->gamepad);
+    if (session->external_pads)
+    {
+        for (unsigned port = 0; port < LIBRETRO_MAX_PORTS; port++)
+        {
+            input.joypad_buttons[port] = session->pads.joypad_buttons[port];
+            for (int stick = 0; stick < 2; stick++)
+            {
+                input.analog[port][stick][0] = session->pads.analog[port][stick][0];
+                input.analog[port][stick][1] = session->pads.analog[port][stick][1];
+            }
+        }
+    }
+    else
+    {
+        fixed_input_read(&session->fixed_input, &input, keyboard_for_joypad && !session->keyboard.game_focus,
+                         session->gamepad);
+    }
     keyboard_input_read(&session->keyboard, &input);
     if (pointer != nullptr)
     {
