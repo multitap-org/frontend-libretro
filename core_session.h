@@ -71,7 +71,7 @@ struct CoreSession
 
     bool     paused     = false;
     bool     step_once  = false;      // run exactly one frame while paused
-    uint32_t state_slot = 0;
+    uint32_t state_slot = LIBRETRO_STATE_SLOT_FIRST;   // 1..9
 
     char message[512] = {};           // what the last start/stop/state call did, for the UI
 };
