@@ -438,7 +438,63 @@ void core_session_wait(const CoreSession* session)
 // Savestates
 // ---------------------------------------------------------------------------
 
-bool core_session_save_state(CoreSession* session)
+// The core's last frame, cropped and scaled as in StateThumbnail, as a PNG.
+static bool save_thumbnail(const LibretroVideoFrame* video, const StateThumbnail* thumbnail, const char* path)
+{
+    if (thumbnail == nullptr || thumbnail->width == 0 || thumbnail->height == 0 || video->pixels == nullptr ||
+        video->width == 0 || video->height == 0)
+    {
+        return false;
+    }
+    // A crop that leaves nothing on an axis is ignored on it (like viewport).
+    uint32_t left = thumbnail->crop.left;
+    uint32_t top = thumbnail->crop.top;
+    uint32_t width = video->width;
+    uint32_t height = video->height;
+    if (left + thumbnail->crop.right < width)
+    {
+        width -= left + thumbnail->crop.right;
+    }
+    else
+    {
+        left = 0;
+    }
+    if (top + thumbnail->crop.bottom < height)
+    {
+        height -= top + thumbnail->crop.bottom;
+    }
+    else
+    {
+        top = 0;
+    }
+
+    SDL_Surface* frame = SDL_CreateSurfaceFrom(static_cast<int>(video->width), static_cast<int>(video->height),
+                                               SDL_PIXELFORMAT_XRGB8888, video->pixels,
+                                               static_cast<int>(video->width * 4));
+    SDL_Surface* cropped = SDL_CreateSurface(static_cast<int>(width), static_cast<int>(height), SDL_PIXELFORMAT_XRGB8888);
+    SDL_Surface* scaled = nullptr;
+    bool ok = false;
+    if (frame != nullptr && cropped != nullptr)
+    {
+        SDL_Rect source = {static_cast<int>(left), static_cast<int>(top), static_cast<int>(width), static_cast<int>(height)};
+        if (SDL_BlitSurface(frame, &source, cropped, nullptr))
+        {
+            scaled = SDL_ScaleSurface(cropped, static_cast<int>(thumbnail->width), static_cast<int>(thumbnail->height),
+                                      SDL_SCALEMODE_LINEAR);
+        }
+        ok = scaled != nullptr && SDL_SavePNG(scaled, path);
+    }
+    if (!ok)
+    {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Savestate thumbnail: could not write %s: %s", path, SDL_GetError());
+    }
+    SDL_DestroySurface(scaled);
+    SDL_DestroySurface(cropped);
+    SDL_DestroySurface(frame);
+    return ok;
+}
+
+bool core_session_save_state(CoreSession* session, const StateThumbnail* thumbnail)
 {
     if (!core_session_running(session))
     {
@@ -449,7 +505,35 @@ bool core_session_save_state(CoreSession* session)
         set_message(session, "Could not save state slot %u (see the log)", session->state_slot);
         return false;
     }
+    char path[LIBRETRO_PATH_MAX + 8] = {};
+    if (libretro_host_state_path(session->host, session->state_slot, path, LIBRETRO_PATH_MAX))
+    {
+        std::strncat(path, ".png", sizeof(path) - std::strlen(path) - 1);
+        if (!save_thumbnail(&session->host->video, thumbnail, path))
+        {
+            SDL_RemovePath(path);   // never another state's picture
+        }
+    }
     set_message(session, "Saved state slot %u", session->state_slot);
+    return true;
+}
+
+bool core_session_slot_info(const CoreSession* session, uint32_t slot, StateSlotInfo* info)
+{
+    *info = StateSlotInfo{};
+    char path[LIBRETRO_PATH_MAX] = {};
+    if (!core_session_running(session) || !libretro_host_state_path(session->host, slot, path, sizeof(path)))
+    {
+        return false;
+    }
+    SDL_PathInfo path_info = {};
+    if (SDL_GetPathInfo(path, &path_info) && path_info.type == SDL_PATHTYPE_FILE)
+    {
+        info->used = true;
+        info->modified = path_info.modify_time;
+        std::snprintf(info->thumbnail_path, sizeof(info->thumbnail_path), "%s.png", path);
+        info->has_thumbnail = host_fs_exists(info->thumbnail_path);
+    }
     return true;
 }
 

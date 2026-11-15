@@ -23,6 +23,7 @@
 #include "frame_timing.h"
 #include "keyboard_input.h"
 #include "libretro_host.h"
+#include "viewport.h"   // ViewportCrop
 #include "vk_texture.h"
 
 struct AppShell;
@@ -126,6 +127,35 @@ void core_session_upload_video(CoreSession* session, AppShell* shell);
 void core_session_wait(const CoreSession* session);
 
 // Savestates in `state_slot`. False if nothing runs or it failed (`message` says why).
-bool core_session_save_state(CoreSession* session);
+// A savestate's thumbnail: the picture as it is shown (decided by Andrés,
+// 2026-11-14: "con el aspect ratio que estamos usando, para que no se vean
+// feos"): the frame cropped like on screen, scaled (smoothly) to the
+// picture's size at x1 with the aspect in use (viewport_picture_size).
+// Saved as <state file>.png, e.g. "Super Mario World (USA).state1.png".
+struct StateThumbnail
+{
+    ViewportCrop crop   = {};
+    uint32_t     width  = 0;   // 0 = no thumbnail
+    uint32_t     height = 0;
+};
+
+// What a slot holds, for a slot picker.
+struct StateSlotInfo
+{
+    bool    used          = false;
+    int64_t modified      = 0;     // SDL_Time (ns since 1970) of the state file
+    bool    has_thumbnail = false;
+    char    thumbnail_path[LIBRETRO_PATH_MAX + 8] = {};   // the state file + ".png"
+};
+
+// Savestates in `state_slot`. False if nothing runs or it failed (`message`
+// says why). `thumbnail` (may be nullptr: none) is written next to the state;
+// an old thumbnail of the slot is removed when no new one could be made, so
+// it never shows another state's picture.
+bool core_session_save_state(CoreSession* session, const StateThumbnail* thumbnail);
 bool core_session_load_state(CoreSession* session);
+
+// What slot `slot` (1..9) holds for the running game. False if nothing runs
+// or there's no states folder.
+bool core_session_slot_info(const CoreSession* session, uint32_t slot, StateSlotInfo* info);
 void core_session_change_slot(CoreSession* session, int32_t delta);
