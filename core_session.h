@@ -58,6 +58,9 @@ struct CoreSession
     CoreOptionsStore* option_store   = nullptr;
     CoreOptionsCache* option_cache   = nullptr;
     uint32_t          options_serial = 0;   // host->options.serial last cached
+    // The next start ignores the stored values (the core gets its own
+    // defaults; nothing is deleted): a safe start after a crash. Cleared by it.
+    bool              skip_stored_options_once = false;
 
     AudioOutput       audio        = {};   // open while a core runs
     AudioOutputConfig audio_config = {};   // the frontend's audio choices: applied at start and by core_session_update

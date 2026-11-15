@@ -228,7 +228,14 @@ bool core_session_start(CoreSession* session, AppShell* shell, const char* core_
         }
         core_options_store_set_context(session->option_store, core, folder, game);
         core_options_store_effective(session->option_store, &saved);
+        if (session->skip_stored_options_once)
+        {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Core options: starting with the core's defaults (%u stored value(s) kept, not used)",
+                        static_cast<unsigned>(saved.size()));
+            saved.clear();
+        }
     }
+    session->skip_stored_options_once = false;
 
     LibretroHostConfig config = {};
     config.core_options_version = session->options_version;
