@@ -30,6 +30,22 @@ struct AppShell;
 struct SDL_Gamepad;
 union SDL_Event;
 
+// Fast forward: while on, each loop runs as many core frames as fit in this
+// share of one frame period (the loop's pacing, vsync or the Exact timer, is
+// unchanged, so the UI stays responsive). Audio is muted, only the last
+// picture of each loop is shown, and the core is told (GET_FASTFORWARDING).
+constexpr double CORE_SESSION_FAST_FORWARD_BUDGET = 0.75;
+
+// What the session's frames cost, for debug UIs and benchmarks. Times are
+// wall-clock (SDL_GetTicksNS) totals since the core started.
+struct CoreSessionStats
+{
+    uint64_t frames    = 0;   // core frames run (retro_run)
+    uint64_t run_ns    = 0;   // inside retro_run: the core's work + storing its picture (libretro_video)
+    uint64_t uploads   = 0;   // pictures uploaded into the texture
+    uint64_t upload_ns = 0;   // CPU side of those uploads: copy into staging + recording the copy
+};
+
 enum class CoreSessionFrame
 {
     skipped,     // nothing ran (no core, paused, minimized, or not due)
@@ -72,6 +88,14 @@ struct CoreSession
 
     bool     paused     = false;
     bool     step_once  = false;      // run exactly one frame while paused
+
+    // Fast forward (CORE_SESSION_FAST_FORWARD_BUDGET): on while the frontend
+    // sets `fast_forward` (a toggle) or the fast forward key is held (Space,
+    // core_session_handle_event). Ignored while paused.
+    bool     fast_forward      = false;
+    bool     fast_forward_held = false;
+
+    CoreSessionStats stats = {};      // reset by every start
     uint32_t state_slot = LIBRETRO_STATE_SLOT_FIRST;   // 1..9
 
     char message[512] = {};           // what the last start/stop/state call did, for the UI
@@ -105,7 +129,7 @@ void core_session_stop(CoreSession* session, AppShell* shell);
 bool core_session_running(const CoreSession* session);
 
 // Keyboard (game focus), gamepads coming and going, short taps on the fixed
-// controls. Returns true if the event was the core's keyboard input and the
+// controls, the fast forward key (hold Space). Returns true if the event was the core's keyboard input and the
 // frontend should ignore it. `keyboard_for_joypad`: false while the frontend's
 // own UI wants the keyboard (a text field has focus).
 bool core_session_handle_event(CoreSession* session, AppShell* shell, const SDL_Event* event, bool keyboard_for_joypad);
@@ -114,7 +138,10 @@ bool core_session_handle_event(CoreSession* session, AppShell* shell, const SDL_
 // the core's fps and the display), vsync on/off and the audio speed.
 void core_session_update(CoreSession* session, AppShell* shell);
 
-// Runs one core frame if one is due: input (fixed controls, keyboard, and the
+// True while fast-forwarding (toggle or held key; not while paused).
+bool core_session_fast_forwarding(const CoreSession* session);
+
+// Runs one core frame if one is due (many while fast-forwarding): input (fixed controls, keyboard, and the
 // pointer fields of `pointer` if not nullptr), retro_run, audio, texture size.
 CoreSessionFrame core_session_run_frame(CoreSession* session, AppShell* shell, const LibretroInputState* pointer,
                                         bool keyboard_for_joypad);

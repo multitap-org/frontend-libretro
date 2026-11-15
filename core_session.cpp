@@ -74,10 +74,13 @@ void core_session_upload_video(CoreSession* session, AppShell* shell)
     {
         return;   // no frame this time (e.g. swapchain being recreated); try next frame
     }
+    uint64_t started = SDL_GetTicksNS();
     if (streaming_texture_upload(&session->texture, renderer_command_buffer(&shell->renderer),
                                  renderer_frame_index(&shell->renderer), video->pixels, video->width, video->height))
     {
         session->uploaded_serial = video->serial;
+        session->stats.uploads++;
+        session->stats.upload_ns += SDL_GetTicksNS() - started;
     }
 }
 
@@ -130,6 +133,9 @@ void core_session_stop(CoreSession* session, AppShell* shell)
     libretro_host_unload_core(session->host);   // writes save RAM first
     session->paused = false;
     session->step_once = false;
+    session->fast_forward = false;
+    session->fast_forward_held = false;
+    session->stats = CoreSessionStats{};
 }
 
 // The content folder's name ("Super Nintendo" for ".../Super Nintendo/smw.sfc"),
@@ -300,8 +306,26 @@ bool core_session_handle_event(CoreSession* session, AppShell* shell, const SDL_
     {
         return true;
     }
-    fixed_input_handle_event(&session->fixed_input, event, keyboard_for_joypad && !session->keyboard.game_focus,
-                             session->gamepad);
+    bool keyboard_enabled = keyboard_for_joypad && !session->keyboard.game_focus;
+    fixed_input_handle_event(&session->fixed_input, event, keyboard_enabled, session->gamepad);
+
+    // Fast forward while Space is held. A key-up always counts, so focus moving
+    // to a text field mid-press can't leave it stuck on.
+    if ((event->type == SDL_EVENT_KEY_DOWN || event->type == SDL_EVENT_KEY_UP) && event->key.scancode == SDL_SCANCODE_SPACE)
+    {
+        if (event->type == SDL_EVENT_KEY_UP)
+        {
+            session->fast_forward_held = false;
+        }
+        else if (keyboard_enabled && !event->key.repeat)
+        {
+            session->fast_forward_held = true;
+        }
+    }
+    if (event->type == SDL_EVENT_WINDOW_FOCUS_LOST && event->window.windowID == SDL_GetWindowID(shell->window))
+    {
+        session->fast_forward_held = false;   // the key-up goes to another window
+    }
 
     if ((event->type == SDL_EVENT_WINDOW_FOCUS_LOST || event->type == SDL_EVENT_WINDOW_FOCUS_GAINED) &&
         event->window.windowID == SDL_GetWindowID(shell->window))
@@ -340,7 +364,9 @@ void core_session_update(CoreSession* session, AppShell* shell)
     // Missed refreshes (and the catch-up frames for them) only count while
     // core frames run: a paused or minimized game has nothing to make up.
     bool minimized = (SDL_GetWindowFlags(shell->window) & SDL_WINDOW_MINIMIZED) != 0;
-    frame_timing_measure(&session->timing, running && !session->paused && !minimized);
+    // Fast forward runs loops of its own length on purpose: not a missed refresh.
+    frame_timing_measure(&session->timing,
+                         running && !session->paused && !minimized && !core_session_fast_forwarding(session));
     bool vsync = session->timing.effective == TimingMode::vsync;
     if (!app_shell_set_vsync(shell, vsync))
     {
@@ -353,6 +379,24 @@ void core_session_update(CoreSession* session, AppShell* shell)
     audio_output_configure(&session->audio, &session->audio_config);
     audio_output_set_speed(&session->audio, frame_timing_audio_ratio(&session->timing),
                            session->audio_config.rate_control);
+}
+
+bool core_session_fast_forwarding(const CoreSession* session)
+{
+    return core_session_running(session) && !session->paused && (session->fast_forward || session->fast_forward_held);
+}
+
+// How long one loop may spend running core frames while fast-forwarding: a
+// share of the period the loop is paced at (the display's refresh in Vsync,
+// the core's frame in Exact).
+static uint64_t fast_forward_budget_ns(const CoreSession* session)
+{
+    double rate = session->timing.effective == TimingMode::vsync ? session->timing.display_hz : session->timing.core_fps;
+    if (rate <= 0.0)
+    {
+        rate = 60.0;
+    }
+    return static_cast<uint64_t>(CORE_SESSION_FAST_FORWARD_BUDGET * 1e9 / rate);
 }
 
 CoreSessionFrame core_session_run_frame(CoreSession* session, AppShell* shell, const LibretroInputState* pointer,
@@ -396,11 +440,23 @@ CoreSessionFrame core_session_run_frame(CoreSession* session, AppShell* shell, c
 
     // The frame, plus the ones a missed refresh lost (Vsync catch-up,
     // frame_timing.h). Each one's audio is queued; only the last picture is
-    // uploaded and shown.
+    // uploaded and shown. Fast forward instead runs frames until its budget
+    // is used up, silently.
+    bool fast = core_session_fast_forwarding(session);
+    libretro_host_set_fast_forward(session->host, fast);
+    uint64_t loop_started = SDL_GetTicksNS();
+    uint64_t budget = fast ? fast_forward_budget_ns(session) : 0;
     uint32_t frames = 1 + (session->paused ? 0 : session->timing.catch_up_frames);
-    for (uint32_t i = 0; i < frames; i++)
+    for (uint32_t i = 0; fast || i < frames; i++)
     {
+        uint64_t frame_started = SDL_GetTicksNS();
+        if (fast && i > 0 && frame_started - loop_started >= budget)
+        {
+            break;
+        }
         libretro_host_run_frame(session->host);
+        session->stats.frames++;
+        session->stats.run_ns += SDL_GetTicksNS() - frame_started;
 
         if (session->host->shutdown_requested)
         {
@@ -412,10 +468,16 @@ CoreSessionFrame core_session_run_frame(CoreSession* session, AppShell* shell, c
         // A core may change its sample rate (SET_SYSTEM_AV_INFO): follow it first.
         // Single-stepping stays silent: one frame of audio after a gap is just a blip.
         audio_output_set_sample_rate(&session->audio, session->host->av_info.timing.sample_rate);
-        if (!session->paused)
+        if (!session->paused && !fast)
         {
             audio_output_push(&session->audio, session->host->audio.samples, session->host->audio.frames);
         }
+    }
+    if (fast)
+    {
+        // Muted: an empty queue isn't an underrun after a clear, and normal
+        // speed starts again from a fresh cushion.
+        audio_output_clear(&session->audio);
     }
 
     cache_options(session);   // a core may declare its options again at runtime
