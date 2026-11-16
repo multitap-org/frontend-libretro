@@ -10,10 +10,9 @@
 #include "app_shell.h"
 #include "debug_ui.h"
 #include "host_fs.h"
+#include "host_log.h"
 
-#if defined(__GNUC__)
-static void set_message(CoreSession* session, const char* format, ...) __attribute__((format(printf, 2, 3)));
-#endif
+static void set_message(CoreSession* session, const char* format, ...) HOST_PRINTF_FORMAT(2, 3);
 static void set_message(CoreSession* session, const char* format, ...)
 {
     va_list args;
