@@ -83,7 +83,7 @@ struct CoreSession
     AudioOutputConfig audio_config = {};   // the frontend's audio choices: applied at start and by core_session_update
     FrameTiming   timing      = {};   // Vsync / Exact
     FixedInput    fixed_input = {};
-    KeyboardInput keyboard    = {};   // libretro keyboard + game focus
+    KeyboardInput keyboard    = {};   // the core's libretro keyboard
     SDL_Gamepad*  gamepad     = nullptr;
 
     bool     paused     = false;
@@ -135,9 +135,10 @@ bool core_session_start(CoreSession* session, AppShell* shell, const char* core_
 void core_session_stop(CoreSession* session, AppShell* shell);
 bool core_session_running(const CoreSession* session);
 
-// Keyboard (game focus), gamepads coming and going, short taps on the fixed
-// controls, the fast forward key (hold Space). Returns true if the event was the core's keyboard input and the
-// frontend should ignore it. `keyboard_for_joypad`: false while the frontend's
+// Keyboard (to the core, see keyboard_input.h), gamepads coming and going,
+// short taps on the fixed controls, the fast forward key (hold Space).
+// Returns true if the frontend should ignore the event (none, for now).
+// `keyboard_for_joypad`: false while the frontend's
 // own UI wants the keyboard (a text field has focus).
 bool core_session_handle_event(CoreSession* session, AppShell* shell, const SDL_Event* event, bool keyboard_for_joypad);
 
@@ -148,7 +149,8 @@ void core_session_set_pads(CoreSession* session, const uint16_t buttons[LIBRETRO
 
 // Once per loop, before running frames: timing mode (from the user's choice,
 // the core's fps and the display), vsync on/off and the audio speed.
-void core_session_update(CoreSession* session, AppShell* shell);
+// `keyboard_for_core`: the game has the keyboard (no UI up).
+void core_session_update(CoreSession* session, AppShell* shell, bool keyboard_for_core);
 
 // True while fast-forwarding (toggle or held key; not while paused).
 bool core_session_fast_forwarding(const CoreSession* session);

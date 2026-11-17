@@ -167,9 +167,8 @@ static uint32_t next_code_point(const char** text)
 // Public functions
 // ---------------------------------------------------------------------------
 
-void keyboard_input_set_game_focus(KeyboardInput* keyboard, bool on, LibretroHost* host, SDL_Window* window)
+static void release_all(KeyboardInput* keyboard, LibretroHost* host)
 {
-    // Release whatever the core saw as held, so no key stays stuck.
     for (unsigned key = 0; key < LIBRETRO_KEY_COUNT; key++)
     {
         if (keyboard->keys[key] != 0)
@@ -178,52 +177,28 @@ void keyboard_input_set_game_focus(KeyboardInput* keyboard, bool on, LibretroHos
             libretro_host_keyboard_event(host, false, key, 0, 0);
         }
     }
-    keyboard->game_focus = on;
-    if (on)
-    {
-        SDL_StartTextInput(window);
-    }
-    else
-    {
-        SDL_StopTextInput(window);
-    }
-    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Game focus %s", on ? "on: the keyboard goes to the core" : "off");
 }
 
-bool keyboard_input_handle_event(KeyboardInput* keyboard, const SDL_Event* event, LibretroHost* host, SDL_Window* window)
+void keyboard_input_handle_event(KeyboardInput* keyboard, const SDL_Event* event, LibretroHost* host)
 {
-    bool key_event = event->type == SDL_EVENT_KEY_DOWN || event->type == SDL_EVENT_KEY_UP;
-
-    // Scroll Lock (as in RetroArch) or F12 (for keyboards without Scroll Lock)
-    // toggle game focus in either state; the core never sees them.
-    if (key_event && (event->key.key == SDLK_SCROLLLOCK || event->key.key == SDLK_F12))
+    if (!keyboard->to_core || host == nullptr)
     {
-        if (event->type == SDL_EVENT_KEY_DOWN && !event->key.repeat)
-        {
-            keyboard_input_set_game_focus(keyboard, !keyboard->game_focus, host, window);
-        }
-        return true;
+        return;
     }
-    if (!keyboard->game_focus)
-    {
-        return false;
-    }
-
-    if (key_event)
+    if (event->type == SDL_EVENT_KEY_DOWN || event->type == SDL_EVENT_KEY_UP)
     {
         bool down = event->type == SDL_EVENT_KEY_DOWN;
         unsigned key = retro_key_for(event->key.key);
-        if (key == RETROK_UNKNOWN)
+        if (key == RETROK_UNKNOWN || (down && event->key.repeat))
         {
-            return true;
+            return;
         }
         keyboard->keys[key] = down ? 1 : 0;
         // Characters come separately, as SDL text input (below): that's what
         // handles shift, dead keys and keyboard layouts correctly.
         libretro_host_keyboard_event(host, down, key, 0, retro_modifiers(event->key.mod));
-        return true;
+        return;
     }
-
     if (event->type == SDL_EVENT_TEXT_INPUT && event->text.text != nullptr)
     {
         uint16_t modifiers = retro_modifiers(SDL_GetModState());
@@ -232,14 +207,21 @@ bool keyboard_input_handle_event(KeyboardInput* keyboard, const SDL_Event* event
         {
             libretro_host_keyboard_event(host, true, RETROK_UNKNOWN, character, modifiers);
         }
-        return true;
     }
-    return false;
 }
 
-void keyboard_input_update(KeyboardInput* keyboard, SDL_Window* window)
+void keyboard_input_update(KeyboardInput* keyboard, bool to_core, LibretroHost* host, SDL_Window* window)
 {
-    if (keyboard->game_focus && !SDL_TextInputActive(window))
+    if (keyboard->to_core && !to_core)
+    {
+        if (host != nullptr)
+        {
+            release_all(keyboard, host);
+        }
+        SDL_StopTextInput(window);
+    }
+    keyboard->to_core = to_core;
+    if (to_core && !SDL_TextInputActive(window))
     {
         SDL_StartTextInput(window);
     }

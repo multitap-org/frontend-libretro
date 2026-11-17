@@ -348,12 +348,9 @@ bool core_session_start(CoreSession* session, AppShell* shell, const char* core_
 
 bool core_session_handle_event(CoreSession* session, AppShell* shell, const SDL_Event* event, bool keyboard_for_joypad)
 {
-    // In game focus, keys and typed text belong to the core alone.
-    if (keyboard_input_handle_event(&session->keyboard, event, session->host, shell->window))
-    {
-        return true;
-    }
-    bool keyboard_enabled = keyboard_for_joypad && !session->keyboard.game_focus;
+    // Keys and typed text go to the core too while the game has the keyboard.
+    keyboard_input_handle_event(&session->keyboard, event, session->host);
+    bool keyboard_enabled = keyboard_for_joypad;
     if (!session->external_pads)
     {
         fixed_input_handle_event(&session->fixed_input, event, keyboard_enabled, session->gamepad);
@@ -403,9 +400,9 @@ bool core_session_handle_event(CoreSession* session, AppShell* shell, const SDL_
     return false;
 }
 
-void core_session_update(CoreSession* session, AppShell* shell)
+void core_session_update(CoreSession* session, AppShell* shell, bool keyboard_for_core)
 {
-    keyboard_input_update(&session->keyboard, shell->window);
+    keyboard_input_update(&session->keyboard, keyboard_for_core, session->host, shell->window);
 
     bool running = core_session_running(session);
     // vsync_forced comes from the swapchain as it is now (set_vsync below may
@@ -505,7 +502,7 @@ CoreSessionFrame core_session_run_frame(CoreSession* session, AppShell* shell, c
     }
     else
     {
-        fixed_input_read(&session->fixed_input, &input, keyboard_for_joypad && !session->keyboard.game_focus,
+        fixed_input_read(&session->fixed_input, &input, keyboard_for_joypad,
                          session->gamepad);
     }
     keyboard_input_read(&session->keyboard, &input);
