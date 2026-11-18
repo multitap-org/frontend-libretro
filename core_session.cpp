@@ -508,10 +508,10 @@ CoreSessionFrame core_session_run_frame(CoreSession* session, AppShell* shell, c
     keyboard_input_read(&session->keyboard, &input);
     if (pointer != nullptr)
     {
-        input.pointer_valid = pointer->pointer_valid;
-        input.pointer_x = pointer->pointer_x;
-        input.pointer_y = pointer->pointer_y;
-        input.pointer_pressed = pointer->pointer_pressed;
+        for (unsigned port = 0; port < LIBRETRO_MAX_PORTS; port++)
+        {
+            input.cursor[port] = pointer->cursor[port];
+        }
     }
 
     libretro_host_set_input(session->host, &input);

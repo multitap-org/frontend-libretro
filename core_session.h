@@ -156,7 +156,7 @@ void core_session_update(CoreSession* session, AppShell* shell, bool keyboard_fo
 bool core_session_fast_forwarding(const CoreSession* session);
 
 // Runs one core frame if one is due (many while fast-forwarding): input (fixed controls, keyboard, and the
-// pointer fields of `pointer` if not nullptr), retro_run, audio, texture size.
+// ports' cursors of `pointer` if not nullptr: mouse, pointer, lightgun), retro_run, audio, texture size.
 CoreSessionFrame core_session_run_frame(CoreSession* session, AppShell* shell, const LibretroInputState* pointer,
                                         bool keyboard_for_joypad);
 
