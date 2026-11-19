@@ -14,12 +14,26 @@
 //     guarantees a core sends every file access through libretro's VFS.
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
+#include <vector>
+
+#include "archive.h"   // ArchiveEntry
 
 #include "libretro_host.h"   // LibretroCoreInfo
 
 // True if `core` takes the archive at `archive_path` whole (see above).
 bool content_archive_core_takes_whole(const LibretroCoreInfo* core, const char* archive_path);
+
+// How many files in `entries` (an archive's listing) `core` can load, and the
+// one in `single` when there's exactly one (else it's emptied): then LOAD on
+// the archive starts that file. Hidden entries don't count: macOS zips carry
+// "__MACOSX/._Game.sfc" next to "Game.sfc".
+int32_t content_archive_loadable(const LibretroCoreInfo* core, const std::vector<ArchiveEntry>* entries,
+                                 std::string* single);
+
+// True for names a file list hides: starting with '.', or "__MACOSX".
+bool content_archive_hidden_name(const char* name);
 
 // The path the core gets for `content_path`: the same path for a normal file
 // or a whole archive; for a path into an archive ("a.7z#Game.sfc") the file

@@ -1,5 +1,7 @@
 #include "content_archive.h"
 
+#include <cstring>
+
 #include <SDL3/SDL.h>
 
 #include "archive.h"
@@ -19,6 +21,49 @@ bool content_archive_core_takes_whole(const LibretroCoreInfo* core, const char* 
     // An empty extension list means "anything": not a statement that the
     // core reads archives, so those get the archive's files instead.
     return core->extensions[0] != '\0' && libretro_core_info_accepts(core, archive_path);
+}
+
+bool content_archive_hidden_name(const char* name)
+{
+    return name[0] == '.' || std::strcmp(name, "__MACOSX") == 0;
+}
+
+// True if the file or any folder on its path is hidden.
+static bool hidden_path(const std::string* name)
+{
+    size_t start = 0;
+    while (start < name->size())
+    {
+        size_t slash = name->find('/', start);
+        size_t end = slash == std::string::npos ? name->size() : slash;
+        if (content_archive_hidden_name(name->substr(start, end - start).c_str()))
+        {
+            return true;
+        }
+        start = end + 1;
+    }
+    return false;
+}
+
+int32_t content_archive_loadable(const LibretroCoreInfo* core, const std::vector<ArchiveEntry>* entries,
+                                 std::string* single)
+{
+    int32_t count = 0;
+    single->clear();
+    for (size_t i = 0; core != nullptr && i < entries->size(); i++)
+    {
+        const ArchiveEntry* entry = &(*entries)[i];
+        if (!entry->is_directory && !hidden_path(&entry->name) && libretro_core_info_accepts(core, entry->name.c_str()))
+        {
+            count++;
+            *single = entry->name;
+        }
+    }
+    if (count != 1)
+    {
+        single->clear();
+    }
+    return count;
 }
 
 bool content_archive_resolve(const char* content_path, const char* cache_directory, std::string* load_path)

@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #include "content_archive.h"
 #include "host_fs.h"
@@ -45,6 +46,40 @@ static void test_takes_whole()
     check(!content_archive_core_takes_whole(&anything, "/r/games.zip"), "empty extension list: browsed");
     check(!content_archive_core_takes_whole(&arcade, "/r/pacman.sfc"), "not an archive: never whole");
     check(!content_archive_core_takes_whole(nullptr, "/r/pacman.zip"), "no core: not whole");
+}
+
+static ArchiveEntry entry(const char* name, bool is_directory)
+{
+    ArchiveEntry result = {};
+    result.name = name;
+    result.is_directory = is_directory;
+    return result;
+}
+
+static void test_loadable()
+{
+    LibretroCoreInfo snes = core_with("sfc|smc", false);
+    std::vector<ArchiveEntry> entries;
+    entries.push_back(entry("Game (Europe).sfc", false));
+    entries.push_back(entry("readme.txt", false));
+    entries.push_back(entry("__MACOSX", true));
+    entries.push_back(entry("__MACOSX/._Game (Europe).sfc", false));
+    entries.push_back(entry(".hidden.sfc", false));
+    std::string single;
+    check(content_archive_loadable(&snes, &entries, &single) == 1 && single == "Game (Europe).sfc",
+          "loadable: one game next to a readme and macOS leftovers");
+
+    entries.push_back(entry("disk/Game (USA).smc", false));
+    check(content_archive_loadable(&snes, &entries, &single) == 2 && single.empty(), "loadable: two games");
+
+    std::vector<ArchiveEntry> none;
+    none.push_back(entry("readme.txt", false));
+    none.push_back(entry("dir.sfc", true));
+    check(content_archive_loadable(&snes, &none, &single) == 0 && single.empty(),
+          "loadable: nothing (a folder named .sfc doesn't count)");
+    check(content_archive_loadable(nullptr, &entries, &single) == 0, "loadable: no core");
+    check(content_archive_hidden_name(".git") && content_archive_hidden_name("__MACOSX") &&
+          !content_archive_hidden_name("Game.sfc"), "hidden names");
 }
 
 static void test_game_name()
@@ -88,6 +123,7 @@ int main(int argc, char** argv)
         return 2;
     }
     test_takes_whole();
+    test_loadable();
     test_game_name();
     test_resolve(argv[1], argv[2]);
 
