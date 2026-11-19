@@ -8,6 +8,7 @@
 #include <SDL3/SDL.h>
 
 #include "app_shell.h"
+#include "content_archive.h"
 #include "debug_ui.h"
 #include "host_fs.h"
 #include "host_log.h"
@@ -264,6 +265,16 @@ bool core_session_start(CoreSession* session, AppShell* shell, const char* core_
         return false;
     }
 
+    // A file inside an archive: extracted (or found in the cache) before the
+    // core loads, so a failure leaves nothing to undo.
+    const char* content = content_path != nullptr && content_path[0] != '\0' ? content_path : nullptr;
+    std::string load_path;
+    if (content != nullptr && !content_archive_resolve(content, session->cache_directory, &load_path))
+    {
+        set_message(session, "Could not extract %s (see the log)", content);
+        return false;
+    }
+
     // The stored option values for this core, folder and game: the host
     // applies them as the core declares its options.
     std::vector<LibretroOptionValue> saved;
@@ -276,7 +287,7 @@ bool core_session_start(CoreSession* session, AppShell* shell, const char* core_
         if (content_path != nullptr && content_path[0] != '\0')
         {
             folder_name(content_path, folder, sizeof(folder));
-            host_fs_stem(content_path, game, sizeof(game));
+            content_archive_game_name(content_path, game, sizeof(game));
         }
         core_options_store_set_context(session->option_store, core, folder, game);
         core_options_store_effective(session->option_store, &saved);
@@ -311,8 +322,7 @@ bool core_session_start(CoreSession* session, AppShell* shell, const char* core_
     session->options_serial = 0;
     cache_options(session);   // declared in retro_set_environment
 
-    const char* content = content_path != nullptr && content_path[0] != '\0' ? content_path : nullptr;
-    if (!libretro_host_load_game(session->host, content))
+    if (!libretro_host_load_game(session->host, content != nullptr ? load_path.c_str() : nullptr))
     {
         set_message(session, "The core could not start%s (see the log)", content != nullptr ? " this content" : " without content");
         libretro_host_unload_core(session->host);

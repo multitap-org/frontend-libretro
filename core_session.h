@@ -61,6 +61,7 @@ struct CoreSession
     char     saves_directory[LIBRETRO_PATH_MAX] = {};                     // SRAM ("" = not kept)
     char     states_directory[LIBRETRO_PATH_MAX] = {};                    // savestates ("" = none)
     char     system_directory[LIBRETRO_PATH_MAX] = {};                    // BIOS etc. ("" = none)
+    char     cache_directory[LIBRETRO_PATH_MAX] = {};                     // files extracted from archives ("" = none)
     uint32_t options_version = LIBRETRO_CORE_OPTIONS_VERSION_MAX;         // reported to the core
     uint32_t language = 0;   // RETRO_LANGUAGE_* for GET_LANGUAGE (0 = English)
 
@@ -124,8 +125,10 @@ bool core_session_set_option(CoreSession* session, CoreOptionLayer layer, const 
 bool core_session_reset_option(CoreSession* session, CoreOptionLayer layer, const char* key);
 
 // Loads the core, then the content (nullptr or "" = none). Paths are used as
-// given (resolve "~" etc. before). On failure the core is unloaded again and
-// `message` says why.
+// given (resolve "~" etc. before). A path into an archive ("a.7z#Game.sfc",
+// content_archive.h) is extracted into cache_directory first, and the core
+// gets that copy; settings and the game's name still come from the archive
+// path. On failure the core is unloaded again and `message` says why.
 //
 // Start and stop destroy `texture`. Never call them in a frame after the
 // texture was handed to ImGui (image, draw list): that frame would render

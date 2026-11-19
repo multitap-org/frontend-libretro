@@ -15,6 +15,7 @@ add_library(frontend_libretro STATIC
     fixed_input.cpp
     core_options_store.cpp
     core_options_cache.cpp
+    content_archive.cpp
 )
 
 target_include_directories(frontend_libretro PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -34,4 +35,18 @@ if(MULTITAP_BUILD_TESTS)
     multitap_set_project_flags(frontend_core_options_cache_test)
     add_test(NAME frontend_core_options_cache COMMAND frontend_core_options_cache_test)
     set_tests_properties(frontend_core_options_cache PROPERTIES PASS_REGULAR_EXPRESSION "core options cache: all checks passed")
+    # Uses frontends-common's archive test data.
+    add_executable(frontend_content_archive_test tests/content_archive_test.cpp)
+    target_link_libraries(frontend_content_archive_test PRIVATE frontend_libretro)
+    multitap_set_project_flags(frontend_content_archive_test)
+    set(CONTENT_ARCHIVE_SCRATCH "${CMAKE_CURRENT_BINARY_DIR}/content_archive_test")
+    add_test(NAME frontend_content_archive_clean COMMAND ${CMAKE_COMMAND} -E rm -rf "${CONTENT_ARCHIVE_SCRATCH}")
+    set_tests_properties(frontend_content_archive_clean PROPERTIES FIXTURES_SETUP content_archive_scratch)
+    add_test(NAME frontend_content_archive
+             COMMAND frontend_content_archive_test "$<TARGET_PROPERTY:frontend_common,SOURCE_DIR>/tests/data"
+                     "${CONTENT_ARCHIVE_SCRATCH}")
+    set_tests_properties(frontend_content_archive PROPERTIES
+                         FIXTURES_REQUIRED content_archive_scratch
+                         PASS_REGULAR_EXPRESSION "content archive: all checks passed"
+                         FAIL_REGULAR_EXPRESSION "FAIL|ERROR: AddressSanitizer|ERROR: LeakSanitizer|runtime error:")
 endif()
