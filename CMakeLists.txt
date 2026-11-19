@@ -8,6 +8,12 @@
 
 multitap_require(frontend-libretro host_libretro frontend_common)
 
+# Games load from zip / 7z (content_archive.cpp): frontends-common builds that
+# only when the frontend has deps/miniz and deps/7zip.
+if(NOT TARGET multitap_dep_miniz OR NOT TARGET multitap_dep_7z)
+    message(FATAL_ERROR "frontend-libretro needs deps/miniz and deps/7zip (zip / 7z reading in frontends-common)")
+endif()
+
 add_library(frontend_libretro STATIC
     core_session.cpp
     core_catalog.cpp
