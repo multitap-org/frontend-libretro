@@ -4,6 +4,8 @@
 
 #include <SDL3/SDL.h>
 
+#include "text_input.h"
+
 // ---------------------------------------------------------------------------
 // SDL keycode -> RETROK_*
 // ---------------------------------------------------------------------------
@@ -210,27 +212,7 @@ void keyboard_input_handle_event(KeyboardInput* keyboard, const SDL_Event* event
     }
 }
 
-// Starts SDL text input for the game. For a core that asked for the keyboard
-// (KEYS): the kind of on-screen keyboard it wants, no autocorrection or
-// capitals (keys go straight to a game, not into a sentence).
-static void start_text_input(SDL_Window* window, const LibretroHost* host)
-{
-    if (host == nullptr || host->text_input.mode != RETRO_EXT_TEXT_INPUT_KEYS)
-    {
-        SDL_StartTextInput(window);
-        return;
-    }
-    SDL_PropertiesID properties = SDL_CreateProperties();
-    SDL_TextInputType type = host->text_input.type == RETRO_EXT_TEXT_INPUT_TYPE_NUMBER ? SDL_TEXTINPUT_TYPE_NUMBER
-                                                                                      : SDL_TEXTINPUT_TYPE_TEXT;
-    SDL_SetNumberProperty(properties, SDL_PROP_TEXTINPUT_TYPE_NUMBER, type);
-    SDL_SetNumberProperty(properties, SDL_PROP_TEXTINPUT_CAPITALIZATION_NUMBER, SDL_CAPITALIZE_NONE);
-    SDL_SetBooleanProperty(properties, SDL_PROP_TEXTINPUT_AUTOCORRECT_BOOLEAN, false);
-    SDL_StartTextInputWithProperties(window, properties);
-    SDL_DestroyProperties(properties);
-}
-
-void keyboard_input_update(KeyboardInput* keyboard, bool to_core, LibretroHost* host, SDL_Window* window)
+void keyboard_input_update(KeyboardInput* keyboard, bool to_core, LibretroHost* host, TextInput* text_input)
 {
     if (keyboard->to_core && !to_core && host != nullptr)
     {
@@ -238,41 +220,12 @@ void keyboard_input_update(KeyboardInput* keyboard, bool to_core, LibretroHost* 
     }
     keyboard->to_core = to_core;
 
-    // On a desktop, text input is on whenever the game has the keyboard: it
-    // shows nothing, and gives characters in the user's layout. Where starting
-    // it opens an on-screen keyboard (phones), only while the core asked for
-    // the keyboard (KEYS, Multitap's text input extension).
-    bool screen_keyboard = SDL_HasScreenKeyboardSupport();
     bool core_asked = host != nullptr && host->text_input.mode == RETRO_EXT_TEXT_INPUT_KEYS;
-    bool wanted = to_core && (!screen_keyboard || core_asked);
+    TextInputType type = core_asked && host->text_input.type == RETRO_EXT_TEXT_INPUT_TYPE_NUMBER ? TextInputType::number
+                                                                                               : TextInputType::text;
     uint32_t serial = host != nullptr ? host->text_input.serial : 0;
-
-    if (keyboard->text_input && !wanted)
-    {
-        SDL_StopTextInput(window);
-        keyboard->text_input = false;
-        return;
-    }
-    if (!wanted)
-    {
-        return;
-    }
-    if (screen_keyboard)
-    {
-        // Once per request (or after the UI took the keyboard): if the user
-        // hides the on-screen keyboard, it stays hidden until the core asks again.
-        if (!keyboard->text_input || keyboard->text_serial != serial)
-        {
-            start_text_input(window, host);
-        }
-    }
-    else if (!SDL_TextInputActive(window) || keyboard->text_serial != serial)
-    {
-        // Dear ImGui turns text input off when one of its own fields loses focus.
-        start_text_input(window, host);
-    }
-    keyboard->text_input = true;
-    keyboard->text_serial = serial;
+    text_input_set_game_chars(text_input, to_core);
+    text_input_set_core_keys(text_input, to_core && core_asked, type, serial);
 }
 
 void keyboard_input_read(const KeyboardInput* keyboard, LibretroInputState* input)

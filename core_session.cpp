@@ -414,7 +414,7 @@ bool core_session_handle_event(CoreSession* session, AppShell* shell, const SDL_
 
 void core_session_update(CoreSession* session, AppShell* shell, bool keyboard_for_core)
 {
-    keyboard_input_update(&session->keyboard, keyboard_for_core, session->host, shell->window);
+    keyboard_input_update(&session->keyboard, keyboard_for_core, session->host, &shell->text_input);
 
     bool running = core_session_running(session);
     // vsync_forced comes from the swapchain as it is now (set_vsync below may

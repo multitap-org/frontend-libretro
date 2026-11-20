@@ -13,15 +13,13 @@
 
 #include "libretro_host.h"
 
-struct SDL_Window;
+struct TextInput;
 union SDL_Event;
 
 struct KeyboardInput
 {
     bool    to_core = false;                 // the game has the keyboard now
     uint8_t keys[LIBRETRO_KEY_COUNT] = {};   // RETROK_* -> held (as the core saw them)
-    bool     text_input = false;             // we started SDL text input for the game
-    uint32_t text_serial = 0;                // the core's text input request it was started for
 };
 
 // Call for every SDL event: sends key and text events to the core while
@@ -30,11 +28,11 @@ struct KeyboardInput
 void keyboard_input_handle_event(KeyboardInput* keyboard, const SDL_Event* event, LibretroHost* host);
 
 // Once per frame: whether the game has the keyboard. Taking it away releases
-// every key the core saw as held. SDL text input is kept on while it has it
-// (Dear ImGui turns it off when one of its own text fields loses focus); on
-// phones, where that opens the on-screen keyboard, only while the core asks
-// for the keyboard (KEYS in Multitap's text input extension).
-void keyboard_input_update(KeyboardInput* keyboard, bool to_core, LibretroHost* host, SDL_Window* window);
+// every key the core saw as held. Tells `text_input` (frontends-common) what
+// the game wants: characters while it has the keyboard (no on-screen
+// keyboard), and the on-screen keyboard while the core asks for one (KEYS in
+// Multitap's text input extension) and the game has the screen.
+void keyboard_input_update(KeyboardInput* keyboard, bool to_core, LibretroHost* host, TextInput* text_input);
 
 // Copies the held keys into this frame's input state.
 void keyboard_input_read(const KeyboardInput* keyboard, LibretroInputState* input);
