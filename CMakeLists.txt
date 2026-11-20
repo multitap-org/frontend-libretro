@@ -22,10 +22,39 @@ add_library(frontend_libretro STATIC
     core_options_store.cpp
     core_options_cache.cpp
     content_archive.cpp
+    core_index.cpp
 )
 
 target_include_directories(frontend_libretro PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(frontend_libretro PUBLIC host_libretro frontend_common)
+
+# The core downloader (core_updater.h). Built where frontends-common has
+# downloads (frontend_download: libcurl + Monocypher) and not switched off;
+# store builds (Play, Steam) pass -DMULTITAP_CORE_UPDATER=OFF: stores don't
+# allow downloading code. Otherwise the same API with nothing behind it.
+option(MULTITAP_CORE_UPDATER "Build the core downloader (OFF for store builds)" ON)
+if(MULTITAP_CORE_UPDATER AND TARGET frontend_download)
+    target_sources(frontend_libretro PRIVATE core_updater.cpp)
+    target_link_libraries(frontend_libretro PUBLIC frontend_download)
+    message(STATUS "frontend-libretro: core downloader on")
+else()
+    target_sources(frontend_libretro PRIVATE core_updater_none.cpp)
+    message(STATUS "frontend-libretro: core downloader off")
+endif()
+
+# The target cores are downloaded for (core_index_build_target), named as
+# multitap-org/cores builds them. "" where there's no build of the cores.
+set(MULTITAP_CORE_TARGET "")
+if(ANDROID)
+    set(MULTITAP_CORE_TARGET "android-arm64-v8a")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+    set(MULTITAP_CORE_TARGET "linux-x86_64")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+    set(MULTITAP_CORE_TARGET "linux-aarch64")
+elseif(WIN32 AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+    set(MULTITAP_CORE_TARGET "windows-x86_64")
+endif()
+set_source_files_properties(core_index.cpp PROPERTIES COMPILE_DEFINITIONS "MULTITAP_CORE_TARGET=\"${MULTITAP_CORE_TARGET}\"")
 
 multitap_set_project_flags(frontend_libretro)
 
@@ -55,4 +84,21 @@ if(MULTITAP_BUILD_TESTS)
                          FIXTURES_REQUIRED content_archive_scratch
                          PASS_REGULAR_EXPRESSION "content archive: all checks passed"
                          FAIL_REGULAR_EXPRESSION "FAIL|ERROR: AddressSanitizer|ERROR: LeakSanitizer|runtime error:")
+
+    if(MULTITAP_CORE_UPDATER AND TARGET frontend_download)
+        # Fake core sites in tests/data/core_updater, served with file:// URLs.
+        add_executable(frontend_core_updater_test tests/core_updater_test.cpp)
+        target_link_libraries(frontend_core_updater_test PRIVATE frontend_libretro)
+        multitap_set_project_flags(frontend_core_updater_test)
+        set(CORE_UPDATER_SCRATCH "${CMAKE_CURRENT_BINARY_DIR}/core_updater_test")
+        add_test(NAME frontend_core_updater_clean COMMAND ${CMAKE_COMMAND} -E rm -rf "${CORE_UPDATER_SCRATCH}")
+        set_tests_properties(frontend_core_updater_clean PROPERTIES FIXTURES_SETUP core_updater_scratch)
+        add_test(NAME frontend_core_updater
+                 COMMAND frontend_core_updater_test "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/core_updater"
+                         "${CORE_UPDATER_SCRATCH}")
+        set_tests_properties(frontend_core_updater PROPERTIES
+                             FIXTURES_REQUIRED core_updater_scratch
+                             PASS_REGULAR_EXPRESSION "core updater: all checks passed"
+                             FAIL_REGULAR_EXPRESSION "FAIL|ERROR: AddressSanitizer|ERROR: LeakSanitizer|runtime error:")
+    endif()
 endif()
