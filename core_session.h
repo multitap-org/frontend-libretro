@@ -24,7 +24,7 @@
 #include "keyboard_input.h"
 #include "libretro_host.h"
 #include "viewport.h"   // ViewportCrop
-#include "vk_texture.h"
+#include "video_texture.h"
 
 struct AppShell;
 struct SDL_Gamepad;
@@ -66,9 +66,8 @@ struct CoreSession
     uint32_t language = 0;   // RETRO_LANGUAGE_* for GET_LANGUAGE (0 = English)
 
     // The core's picture, uploaded once per new frame.
-    StreamingTexture texture         = {};
-    uint64_t         texture_id      = 0;   // ImGui texture id, 0 = none
-    uint64_t         uploaded_serial = 0;   // host->video.serial in the texture
+    VideoTexture texture         = {};   // texture.imgui_id: what ImGui draws, 0 = none
+    uint64_t     uploaded_serial = 0;    // host->video.serial in the texture
 
     // Core options the frontend keeps (not owned; nullptr = not kept): the
     // stored values go to the core when it declares its options, and what

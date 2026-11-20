@@ -9,7 +9,6 @@
 
 #include "app_shell.h"
 #include "content_archive.h"
-#include "debug_ui.h"
 #include "host_fs.h"
 #include "host_log.h"
 
@@ -29,26 +28,18 @@ static void set_message(CoreSession* session, const char* format, ...)
 
 static void destroy_texture(CoreSession* session, AppShell* shell)
 {
-    if (session->texture.image == VK_NULL_HANDLE)
-    {
-        return;
-    }
-    vkDeviceWaitIdle(shell->vulkan.device);   // the GPU may still be drawing it
-    debug_ui_remove_texture(session->texture_id);
-    session->texture_id = 0;
-    streaming_texture_destroy(&session->texture, &shell->vulkan);
+    video_texture_destroy(&session->texture, shell);   // waits for the GPU: it may still be drawing it
     session->uploaded_serial = 0;
 }
 
-// The texture format for a libretro pixel format (vk_texture.h: the bit
-// layouts match, little-endian).
-static VkFormat texture_format_for(retro_pixel_format format)
+// The texture format for a libretro pixel format (the layouts are the same).
+static FramePixelFormat texture_format_for(retro_pixel_format format)
 {
     switch (format)
     {
-        case RETRO_PIXEL_FORMAT_RGB565:   return VK_FORMAT_R5G6B5_UNORM_PACK16;
-        case RETRO_PIXEL_FORMAT_0RGB1555: return VK_FORMAT_A1R5G5B5_UNORM_PACK16;
-        default:                          return VK_FORMAT_B8G8R8A8_UNORM;
+        case RETRO_PIXEL_FORMAT_RGB565:   return FramePixelFormat::rgb565;
+        case RETRO_PIXEL_FORMAT_0RGB1555: return FramePixelFormat::xrgb1555;
+        default:                          return FramePixelFormat::xrgb8888;
     }
 }
 
@@ -63,25 +54,26 @@ static bool use_native_pixel_formats(const AppShell* shell)
     {
         return false;
     }
-    return streaming_texture_format_supported(&shell->vulkan, VK_FORMAT_R5G6B5_UNORM_PACK16) &&
-           streaming_texture_format_supported(&shell->vulkan, VK_FORMAT_A1R5G5B5_UNORM_PACK16) &&
-           streaming_texture_format_supported(&shell->vulkan, VK_FORMAT_B8G8R8A8_UNORM);
+    return video_texture_format_supported(shell, FramePixelFormat::rgb565) &&
+           video_texture_format_supported(shell, FramePixelFormat::xrgb1555) &&
+           video_texture_format_supported(shell, FramePixelFormat::xrgb8888);
 }
 
 // The texture format the host's frames come in: the core's format when the
-// host keeps it native, XRGB8888-with-alpha (B8G8R8A8) when it converts.
-static VkFormat frame_texture_format(const LibretroHost* host)
+// host keeps it native, XRGB8888-with-alpha when it converts.
+static FramePixelFormat frame_texture_format(const LibretroHost* host)
 {
-    return host->native_pixel_formats ? texture_format_for(host->pixel_format) : STREAMING_TEXTURE_FORMAT;
+    return host->native_pixel_formats ? texture_format_for(host->pixel_format) : FramePixelFormat::xrgb8888;
 }
 
 // Makes sure the texture can hold width x height in `format`. Recreating it
 // waits for the GPU, so it's sized to the core's maximum geometry up front
 // (and the format only changes if the core changes its pixel format).
-static bool ensure_texture(CoreSession* session, AppShell* shell, uint32_t width, uint32_t height, VkFormat format)
+static bool ensure_texture(CoreSession* session, AppShell* shell, uint32_t width, uint32_t height,
+                           FramePixelFormat format)
 {
-    StreamingTexture* texture = &session->texture;
-    if (texture->image != VK_NULL_HANDLE && width <= texture->capacity_width && height <= texture->capacity_height &&
+    VideoTexture* texture = &session->texture;
+    if (video_texture_created(texture) && width <= texture->capacity_width && height <= texture->capacity_height &&
         texture->format == format)
     {
         return true;
@@ -91,12 +83,11 @@ static bool ensure_texture(CoreSession* session, AppShell* shell, uint32_t width
 
     destroy_texture(session, shell);
     // Opaque: a core's picture has no alpha (native frames leave those bits unused).
-    if (!streaming_texture_create_format(texture, &shell->vulkan, new_width, new_height, format, true))
+    if (!video_texture_create(texture, shell, new_width, new_height, format, true))
     {
         set_message(session, "Could not create a %ux%u texture for the core's video", new_width, new_height);
         return false;
     }
-    session->texture_id = debug_ui_add_texture(texture->view);
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Core video texture: %ux%u, %s", new_width, new_height,
                 session->host->native_pixel_formats ? "the core's own pixel format" : "converted to XRGB8888");
     return true;
@@ -112,7 +103,7 @@ void core_session_upload_video(CoreSession* session, AppShell* shell)
     // A frame in another format than the texture (the core changed it) waits
     // for run_frame's ensure_texture.
     if (video->bytes_per_pixel != session->texture.bytes_per_pixel ||
-        (session->host->native_pixel_formats ? texture_format_for(video->format) : STREAMING_TEXTURE_FORMAT) !=
+        (session->host->native_pixel_formats ? texture_format_for(video->format) : FramePixelFormat::xrgb8888) !=
             session->texture.format)
     {
         return;
@@ -122,8 +113,7 @@ void core_session_upload_video(CoreSession* session, AppShell* shell)
         return;   // no frame this time (e.g. swapchain being recreated); try next frame
     }
     uint64_t started = SDL_GetTicksNS();
-    if (streaming_texture_upload(&session->texture, renderer_command_buffer(&shell->renderer),
-                                 renderer_frame_index(&shell->renderer), video->pixels, video->width, video->height))
+    if (video_texture_upload(&session->texture, shell, video->pixels, video->width, video->height))
     {
         session->uploaded_serial = video->serial;
         session->stats.uploads++;
