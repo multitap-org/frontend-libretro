@@ -18,6 +18,21 @@ static std::string value_of(const SettingsFile* file, const char* section, const
     return value != nullptr ? std::string(value) : std::string();
 }
 
+// No type (indexes from before it existed) is main; a type this build doesn't
+// know yet is hidden like an experimental one rather than listed by default.
+static CoreType type_of(const std::string& value)
+{
+    if (value.empty() || value == "main")
+    {
+        return CoreType::main;
+    }
+    if (value == "legacy")
+    {
+        return CoreType::legacy;
+    }
+    return CoreType::experimental;
+}
+
 // A name a core may be installed under: no folders, no "..", nothing hidden.
 // The index is signed, but a mistake in it must still never write outside
 // the cores folder.
@@ -111,6 +126,7 @@ bool core_index_parse(CoreIndex* index, const char* text, size_t size, const cha
         entry.commit         = value_of(&file, section, "commit");
         entry.license        = value_of(&file, section, "license");
         entry.free           = value_of(&file, section, "free") == "true";
+        entry.type           = type_of(value_of(&file, section, "type"));
         entry.systems        = value_of(&file, section, "systems");
         entry.url            = value_of(&file, section, "url");
         entry.sha256         = value_of(&file, section, "sha256");

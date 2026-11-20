@@ -10,7 +10,7 @@
 //   [linux-x86_64/sameboy]
 //   name=SameBoy
 //   file=sameboy_libretro.so
-//   version=v1.0.5 ... free=true ... url=https://... (or relative to the site)
+//   version=v1.0.5 ... free=true type=main ... url=https://... (or relative to the site)
 //
 // Built by multitap-org/cores (scripts/make-release.sh) and the server's
 // publisher; see multitap-org/cores' README for every field.
@@ -19,6 +19,15 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+
+// How the downloader lists a core (the index's `type=`, chosen in
+// multitap-org/cores): main ones always, the others when the user asks.
+enum class CoreType
+{
+    main,           // listed by default ("type=main", or no type: older indexes)
+    legacy,         // older versions of a core (Snes9x 2005, ...): OLDER VERSIONS
+    experimental,   // unsupported, or not fully working in our frontends: EXPERIMENTAL
+};
 
 struct CoreIndexEntry
 {
@@ -29,6 +38,7 @@ struct CoreIndexEntry
     std::string commit;           // upstream commit (what "up to date" compares)
     std::string license;          // SPDX-style, "MIT", "GPL-2.0", "Non-commercial"
     bool        free = false;     // free-licensed (store builds offer only these)
+    CoreType    type = CoreType::main;
     std::string systems;          // "Game Boy|Game Boy Color"
     std::string url;              // the zip
     std::string sha256;           // of the zip

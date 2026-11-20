@@ -176,6 +176,22 @@ int main(int argc, char** argv)
     check(updater.message_is_error && !host_fs_exists((cores + "/nonfree_libretro.so").c_str()),
           "missing zip fails");
 
+    // Types: none = main (the test sites have none), unknown = experimental.
+    check(updater.index.entries[0].type == CoreType::main, "no type is main");
+    CoreIndex typed;
+    const char* typed_text =
+        "release=x\ntarget=test-target\n"
+        "[test-target/a]\nname=A\nfile=a_libretro.so\ncommit=c\nurl=a.zip\nsize=1\ntype=legacy\n"
+        "sha256=0000000000000000000000000000000000000000000000000000000000000000\n"
+        "library_sha256=0000000000000000000000000000000000000000000000000000000000000000\n"
+        "[test-target/b]\nname=B\nfile=b_libretro.so\ncommit=c\nurl=b.zip\nsize=1\ntype=someday\n"
+        "sha256=0000000000000000000000000000000000000000000000000000000000000000\n"
+        "library_sha256=0000000000000000000000000000000000000000000000000000000000000000\n";
+    check(core_index_parse(&typed, typed_text, std::strlen(typed_text), "test-target"), "typed index");
+    check(typed.entries.size() == 2 && typed.entries[0].type == CoreType::legacy &&
+              typed.entries[1].type == CoreType::experimental,
+          "legacy, and an unknown type hidden as experimental");
+
     // Wrong target.
     CoreIndex index;
     const char* text = "release=x\ntarget=linux-x86_64\n";
