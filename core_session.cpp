@@ -559,6 +559,12 @@ CoreSessionFrame core_session_run_frame(CoreSession* session, AppShell* shell, c
         if (!session->paused && !fast)
         {
             audio_output_push(&session->audio, session->host->audio.samples, session->host->audio.frames);
+            if (session->capture_audio && session->host->audio.frames > 0)
+            {
+                const int16_t* samples = session->host->audio.samples;
+                session->captured_audio.insert(session->captured_audio.end(), samples,
+                                               samples + session->host->audio.frames * 2);
+            }
         }
     }
     if (fast)
