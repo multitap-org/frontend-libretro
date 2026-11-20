@@ -79,6 +79,12 @@ struct CoreSession
     // The next start ignores the stored values (the core gets its own
     // defaults; nothing is deleted): a safe start after a crash. Cleared by it.
     bool              skip_stored_options_once = false;
+    // Remote play: when set, the audio of every frame run that's heard (not
+    // paused, not fast forward) is also added here, stereo pairs, for the
+    // frontend to send and clear. Reserved when turned on; not grown per
+    // frame after the first few.
+    bool                 capture_audio = false;
+    std::vector<int16_t> captured_audio;
 
     AudioOutput       audio        = {};   // open while a core runs
     AudioOutputConfig audio_config = {};   // the frontend's audio choices: applied at start and by core_session_update
