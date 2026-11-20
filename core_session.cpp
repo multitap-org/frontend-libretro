@@ -309,6 +309,8 @@ bool core_session_start(CoreSession* session, AppShell* shell, const char* core_
     config.saved_options = saved.data();
     config.saved_option_count = static_cast<uint32_t>(saved.size());
     config.native_pixel_formats = use_native_pixel_formats(shell);
+    // Cores that can make any rate (SameBoy) make the device's: no resampling.
+    config.target_sample_rate = static_cast<uint32_t>(audio_output_device_rate(&session->audio_config));
     if (!libretro_host_load_core(session->host, core_path, &config))
     {
         set_message(session, "Could not load the core %s (see the log)", core_path);
