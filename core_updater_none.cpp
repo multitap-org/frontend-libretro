@@ -19,8 +19,8 @@ const char* core_updater_key_hex(int32_t)
     return nullptr;
 }
 
-bool core_updater_init(CoreUpdater* updater, const char*, bool, const char* const*, int32_t, const char*,
-                       const char*, const char*)
+bool core_updater_init(CoreUpdater* updater, const char*, const char*, bool, const char* const*, int32_t,
+                       const char*, const char*, const char*)
 {
     updater->message = "core downloads aren't part of this build";
     updater->message_is_error = true;

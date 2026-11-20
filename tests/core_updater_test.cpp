@@ -37,7 +37,7 @@ static std::string g_scratch;
 static bool init_site(CoreUpdater* updater, const char* site)
 {
     std::string base = "file://" + g_data + "/" + site;
-    return core_updater_init(updater, base.c_str(), true, TEST_KEYS, 1, "test-target",
+    return core_updater_init(updater, "multitap-test", base.c_str(), true, TEST_KEYS, 1, "test-target",
                              (g_scratch + "/cores").c_str(), (g_scratch + "/work").c_str());
 }
 
@@ -93,7 +93,7 @@ int main(int argc, char** argv)
     check(core_updater_key_count() >= 1 && std::strlen(core_updater_key_hex(0)) == 64, "project key present");
 
     CoreUpdater updater;
-    check(!core_updater_init(&updater, "http://example.invalid", false, TEST_KEYS, 1, "test-target",
+    check(!core_updater_init(&updater, "multitap-test", "http://example.invalid", false, TEST_KEYS, 1, "test-target",
                              cores.c_str(), (g_scratch + "/work").c_str()),
           "plain http refused without allow_insecure");
 

@@ -265,7 +265,7 @@ static bool worker_start(CoreUpdater* updater, CoreUpdaterTask task)
 
 // --- Main thread ---------------------------------------------------------
 
-bool core_updater_init(CoreUpdater* updater, const char* base_url, bool allow_insecure,
+bool core_updater_init(CoreUpdater* updater, const char* user_agent, const char* base_url, bool allow_insecure,
                        const char* const* key_hex, int32_t key_count, const char* target,
                        const char* cores_dir, const char* work_dir)
 {
@@ -294,6 +294,12 @@ bool core_updater_init(CoreUpdater* updater, const char* base_url, bool allow_in
         updater->message = "the core server must be an https:// address";
         updater->message_is_error = true;
         host_log(LogLevel::error, "core_updater: refused server %s (not HTTPS)", updater->base_url.c_str());
+        return false;
+    }
+    if (!net_http_init(user_agent))
+    {
+        updater->message = "can't start HTTP downloads";
+        updater->message_is_error = true;
         return false;
     }
     if (!host_fs_make_directories(work_dir))

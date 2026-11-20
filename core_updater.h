@@ -113,12 +113,16 @@ bool core_updater_available();
 int32_t     core_updater_key_count();
 const char* core_updater_key_hex(int32_t index);
 
-// Sets up (nothing runs yet). `base_url` must be https:// unless
+// Sets up (nothing runs yet; call it again to change the server or the cores
+// folder, while idle). Starts net_http the first time (`user_agent`, e.g.
+// "piccolo/0.3"), so the frontend needs no HTTP code of its own; it is never
+// shut down (curl's global state lives until the program ends).
+// `base_url` must be https:// unless
 // `allow_insecure` (development: http:// and file:// too). Keys: public keys
 // in hex (normally core_updater_key_hex). `target`: core_index_build_target()
 // except in tests. False (logged, `message` says why) if the URL is refused or
 // the work folder can't be made.
-bool core_updater_init(CoreUpdater* updater, const char* base_url, bool allow_insecure,
+bool core_updater_init(CoreUpdater* updater, const char* user_agent, const char* base_url, bool allow_insecure,
                        const char* const* key_hex, int32_t key_count, const char* target,
                        const char* cores_dir, const char* work_dir);
 
