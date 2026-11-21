@@ -140,8 +140,22 @@ bool core_session_reset_option(CoreSession* session, CoreOptionLayer layer, cons
 // with a destroyed descriptor set. Call them before the UI draws the picture,
 // or outside the frame (e.g. remember a UI choice and act on it next loop).
 bool core_session_start(CoreSession* session, AppShell* shell, const char* core_path, const char* content_path);
+
+// Starts the core's subsystem `subsystem` (its ident, LibretroSubsystem) with
+// one content path per subsystem file, in order; nullptr or "" leaves an
+// optional file out. Each path is handled like core_session_start's (one
+// inside an archive is extracted). Core options use the first file's folder
+// and the game name core_session_special_game_name gives; savestates are
+// named the same way by the host.
+bool core_session_start_special(CoreSession* session, AppShell* shell, const char* core_path, const char* subsystem,
+                                const char* const* content_paths, uint32_t content_count);
 void core_session_stop(CoreSession* session, AppShell* shell);
 bool core_session_running(const CoreSession* session);
+
+// The name a subsystem start goes by (core options' game layer, lists): the
+// names of the files given (content_archive_game_name) joined with " + ",
+// "SGB + Tetris". False if none is given or it doesn't fit.
+bool core_session_special_game_name(const char* const* content_paths, uint32_t content_count, char* out, size_t out_size);
 
 // Keyboard (to the core, see keyboard_input.h), gamepads coming and going,
 // short taps on the fixed controls, the fast forward key (hold Space).

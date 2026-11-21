@@ -70,6 +70,23 @@ if(MULTITAP_BUILD_TESTS)
     multitap_set_project_flags(frontend_core_options_cache_test)
     add_test(NAME frontend_core_options_cache COMMAND frontend_core_options_cache_test)
     set_tests_properties(frontend_core_options_cache PROPERTIES PASS_REGULAR_EXPRESSION "core options cache: all checks passed")
+    # Subsystems through the catalog's cache, with host-libretro's test core.
+    if(TARGET test_core)
+        add_executable(frontend_core_catalog_test tests/core_catalog_test.cpp)
+        target_link_libraries(frontend_core_catalog_test PRIVATE frontend_libretro)
+        multitap_set_project_flags(frontend_core_catalog_test)
+        add_dependencies(frontend_core_catalog_test test_core)
+        set(CORE_CATALOG_SCRATCH "${CMAKE_CURRENT_BINARY_DIR}/core_catalog_test")
+        add_test(NAME frontend_core_catalog_clean COMMAND ${CMAKE_COMMAND} -E rm -rf "${CORE_CATALOG_SCRATCH}")
+        set_tests_properties(frontend_core_catalog_clean PROPERTIES FIXTURES_SETUP core_catalog_scratch)
+        add_test(NAME frontend_core_catalog
+                 COMMAND frontend_core_catalog_test $<TARGET_FILE:test_core> "${CORE_CATALOG_SCRATCH}")
+        set_tests_properties(frontend_core_catalog PROPERTIES
+            FIXTURES_REQUIRED core_catalog_scratch
+            PASS_REGULAR_EXPRESSION "core catalog: all checks passed"
+            FAIL_REGULAR_EXPRESSION "FAIL ")
+    endif()
+
     # Uses frontends-common's archive test data.
     add_executable(frontend_content_archive_test tests/content_archive_test.cpp)
     target_link_libraries(frontend_content_archive_test PRIVATE frontend_libretro)
