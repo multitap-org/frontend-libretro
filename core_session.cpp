@@ -256,40 +256,20 @@ bool core_session_reset_option(CoreSession* session, CoreOptionLayer layer, cons
                                     effective != nullptr ? effective : option->values[option->default_index]);
 }
 
-bool core_session_start(CoreSession* session, AppShell* shell, const char* core_path, const char* content_path)
+// Loads the core with the stored option values for this core, folder and
+// game (the host applies them as the core declares its options). `folder_of`
+// is the content path the folder layer comes from, `game` the game layer's
+// name; both nullptr / "" without content.
+static bool load_core(CoreSession* session, AppShell* shell, const char* core_path, const char* folder_of, const char* game)
 {
-    core_session_stop(session, shell);
-    if (core_path == nullptr || core_path[0] == '\0')
-    {
-        set_message(session, "Choose a core first");
-        return false;
-    }
-
-    // A file inside an archive: extracted (or found in the cache) before the
-    // core loads, so a failure leaves nothing to undo.
-    const char* content = content_path != nullptr && content_path[0] != '\0' ? content_path : nullptr;
-    std::string load_path;
-    if (content != nullptr && !content_archive_resolve(content, session->cache_directory, &load_path))
-    {
-        set_message(session, "Could not extract %s (see the log)", content);
-        return false;
-    }
-
-    // The stored option values for this core, folder and game: the host
-    // applies them as the core declares its options.
     std::vector<LibretroOptionValue> saved;
     if (session->option_store != nullptr)
     {
         char core[256] = {};
         char folder[LIBRETRO_PATH_MAX] = {};
-        char game[LIBRETRO_PATH_MAX] = {};
         libretro_core_short_name(core_path, core, sizeof(core));
-        if (content_path != nullptr && content_path[0] != '\0')
-        {
-            folder_name(content_path, folder, sizeof(folder));
-            content_archive_game_name(content_path, game, sizeof(game));
-        }
-        core_options_store_set_context(session->option_store, core, folder, game);
+        folder_name(folder_of, folder, sizeof(folder));
+        core_options_store_set_context(session->option_store, core, folder, game != nullptr ? game : "");
         core_options_store_effective(session->option_store, &saved);
         if (session->skip_stored_options_once)
         {
@@ -323,14 +303,13 @@ bool core_session_start(CoreSession* session, AppShell* shell, const char* core_
     }
     session->options_serial = 0;
     cache_options(session);   // declared in retro_set_environment
+    return true;
+}
 
-    if (!libretro_host_load_game(session->host, content != nullptr ? load_path.c_str() : nullptr))
-    {
-        set_message(session, "The core could not start%s (see the log)", content != nullptr ? " this content" : " without content");
-        libretro_host_unload_core(session->host);
-        return false;
-    }
-
+// After the game loaded: the texture and the sound. False (core unloaded) if
+// the texture couldn't be made.
+static bool finish_start(CoreSession* session, AppShell* shell)
+{
     // Texture at the core's maximum size, so it rarely needs recreating.
     const retro_game_geometry* geometry = &session->host->av_info.geometry;
     uint32_t width = geometry->max_width > 0 ? geometry->max_width : geometry->base_width;
@@ -352,6 +331,130 @@ bool core_session_start(CoreSession* session, AppShell* shell, const char* core_
     const char* name = session->host->system_info.library_name;
     set_message(session, "Running %s", name != nullptr ? name : "core");
     return true;
+}
+
+bool core_session_start(CoreSession* session, AppShell* shell, const char* core_path, const char* content_path)
+{
+    core_session_stop(session, shell);
+    if (core_path == nullptr || core_path[0] == '\0')
+    {
+        set_message(session, "Choose a core first");
+        return false;
+    }
+
+    // A file inside an archive: extracted (or found in the cache) before the
+    // core loads, so a failure leaves nothing to undo.
+    const char* content = content_path != nullptr && content_path[0] != '\0' ? content_path : nullptr;
+    std::string load_path;
+    if (content != nullptr && !content_archive_resolve(content, session->cache_directory, &load_path))
+    {
+        set_message(session, "Could not extract %s (see the log)", content);
+        return false;
+    }
+
+    char game[LIBRETRO_PATH_MAX] = {};
+    if (content != nullptr)
+    {
+        content_archive_game_name(content, game, sizeof(game));
+    }
+    if (!load_core(session, shell, core_path, content, game))
+    {
+        return false;
+    }
+
+    if (!libretro_host_load_game(session->host, content != nullptr ? load_path.c_str() : nullptr))
+    {
+        set_message(session, "The core could not start%s (see the log)", content != nullptr ? " this content" : " without content");
+        libretro_host_unload_core(session->host);
+        return false;
+    }
+    return finish_start(session, shell);
+}
+
+bool core_session_special_game_name(const char* const* content_paths, uint32_t content_count, char* out, size_t out_size)
+{
+    if (out_size == 0)
+    {
+        return false;
+    }
+    out[0] = '\0';
+    size_t used = 0;
+    for (uint32_t i = 0; i < content_count; i++)
+    {
+        char name[LIBRETRO_PATH_MAX] = {};
+        if (content_paths[i] == nullptr || content_paths[i][0] == '\0')
+        {
+            continue;
+        }
+        if (!content_archive_game_name(content_paths[i], name, sizeof(name)))
+        {
+            out[0] = '\0';
+            return false;
+        }
+        int written = std::snprintf(out + used, out_size - used, "%s%s", used > 0 ? " + " : "", name);
+        if (written < 0 || static_cast<size_t>(written) >= out_size - used)
+        {
+            out[0] = '\0';
+            return false;
+        }
+        used += static_cast<size_t>(written);
+    }
+    return used > 0;
+}
+
+bool core_session_start_special(CoreSession* session, AppShell* shell, const char* core_path, const char* subsystem,
+                                const char* const* content_paths, uint32_t content_count)
+{
+    core_session_stop(session, shell);
+    if (core_path == nullptr || core_path[0] == '\0')
+    {
+        set_message(session, "Choose a core first");
+        return false;
+    }
+    if (content_count == 0 || content_count > LIBRETRO_SUBSYSTEM_ROMS_MAX)
+    {
+        set_message(session, "%s: no content files", subsystem != nullptr ? subsystem : "Subsystem");
+        return false;
+    }
+
+    // Each file on its own: one inside an archive is extracted, a whole
+    // archive or a plain file is passed as it is. Before the core loads.
+    std::vector<std::string> load_paths(content_count);
+    std::vector<const char*> paths(content_count, nullptr);
+    const char* first = nullptr;
+    for (uint32_t i = 0; i < content_count; i++)
+    {
+        const char* content = content_paths[i];
+        if (content == nullptr || content[0] == '\0')
+        {
+            continue;   // an optional file left out; the host checks required ones
+        }
+        if (!content_archive_resolve(content, session->cache_directory, &load_paths[i]))
+        {
+            set_message(session, "Could not extract %s (see the log)", content);
+            return false;
+        }
+        paths[i] = load_paths[i].c_str();
+        first = first != nullptr ? first : content;
+    }
+
+    // Core options: the folder of the first file, the game layer named like
+    // the savestates ("SGB + Tetris").
+    char game[LIBRETRO_PATH_MAX] = {};
+    core_session_special_game_name(content_paths, content_count, game, sizeof(game));
+    if (!load_core(session, shell, core_path, first, game))
+    {
+        return false;
+    }
+
+    if (!libretro_host_load_game_special(session->host, subsystem, paths.data(), content_count))
+    {
+        set_message(session, "The core could not start %s with these files (see the log)",
+                    subsystem != nullptr ? subsystem : "the subsystem");
+        libretro_host_unload_core(session->host);
+        return false;
+    }
+    return finish_start(session, shell);
 }
 
 // ---------------------------------------------------------------------------
