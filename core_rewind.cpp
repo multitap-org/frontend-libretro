@@ -357,17 +357,18 @@ static void finish_measure(CoreRewind* rewind)
     double serialize = static_cast<double>(percentile_95(measure->serialize_ns, measure->frames));
     double frame     = static_cast<double>(percentile_95(measure->frame_ns, measure->frames));
 
-    measure->record = (serialize + encode) / period;
+    measure->record = serialize / period;
     measure->load   = static_cast<double>(load_ns) / period;
+    measure->encode = encode / period;
     measure->total  = (frame + serialize) / period;
     measure->skip   = static_cast<double>(skipped) / static_cast<double>(measure->frames);
     bool scrub = measure->record <= CORE_REWIND_SCRUB_RECORD_MAX && measure->load <= CORE_REWIND_SCRUB_LOAD_MAX &&
-                 measure->total <= CORE_REWIND_SCRUB_TOTAL_MAX && measure->skip <= CORE_REWIND_SCRUB_SKIP_MAX;
+                 measure->encode <= CORE_REWIND_SCRUB_ENCODE_MAX && measure->skip <= CORE_REWIND_SCRUB_SKIP_MAX;
     host_log(LogLevel::info,
-             "Rewind AUTO: record %.1f%% (serialize %.3f ms + encode %.3f ms), load %.1f%%, frame + serialize "
-             "%.1f%%, skipped %.1f%% of a frame: %s",
-             measure->record * 100.0, serialize / 1e6, encode / 1e6, measure->load * 100.0, measure->total * 100.0,
-             measure->skip * 100.0, scrub ? "SCRUB" : "SNAPSHOTS");
+             "Rewind AUTO: serialize %.1f%% (%.3f ms), load %.1f%%, encode %.1f%% (%.3f ms, worker), skipped %.1f%%; "
+             "the core's frame + serialize %.1f%%: %s",
+             measure->record * 100.0, serialize / 1e6, measure->load * 100.0, measure->encode * 100.0, encode / 1e6,
+             measure->skip * 100.0, measure->total * 100.0, scrub ? "SCRUB" : "SNAPSHOTS");
 
     rewind->verdict = true;
     if (scrub)

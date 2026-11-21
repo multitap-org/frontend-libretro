@@ -109,9 +109,10 @@ struct CoreSession
     bool               external_pads = false;
     LibretroInputState pads          = {};   // joypad_buttons and analog only
 
-    // Rewind (core_rewind.h; not owned, nullptr = none): started with every
-    // game, recorded around every frame; while its DVR is open the session
-    // runs the DVR's PLAY instead of the game.
+    // Rewind (core_rewind.h; not owned, nullptr = none): the frontend starts
+    // it once the game's settings are known (core_rewind_start); the session
+    // records around every frame, stops it with the game, and while its DVR
+    // is open runs the DVR's PLAY instead of the game.
     CoreRewind* rewind = nullptr;
 
     CoreSessionStats stats = {};      // reset by every start
@@ -177,6 +178,12 @@ CoreSessionFrame core_session_run_frame(CoreSession* session, AppShell* shell, c
 // Uploads the newest core frame into `texture` (outside the rendering pass;
 // call after building the UI, before app_shell_present).
 void core_session_upload_video(CoreSession* session, AppShell* shell);
+
+// The core's current picture copied into `target` (another texture: a DVR
+// thumbnail), which is created / resized to fit. Same rules as
+// core_session_upload_video (after app_shell_acquire, before present).
+// False if there's no picture or it couldn't be copied.
+bool core_session_copy_picture(CoreSession* session, AppShell* shell, VideoTexture* target);
 
 // Exact timing mode: sleeps until the next frame is due. Call at the end of the loop.
 void core_session_wait(const CoreSession* session);

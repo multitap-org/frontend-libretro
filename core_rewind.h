@@ -66,10 +66,17 @@ enum class CoreRewindState : uint8_t
 constexpr double   CORE_REWIND_WARMUP_SECONDS = 5.0;
 constexpr uint32_t CORE_REWIND_MEASURE_FRAMES = 120;
 constexpr uint32_t CORE_REWIND_MEASURE_LOADS  = 4;
-// AUTO picks SCRUB when (95th percentiles, shares of one frame period):
-constexpr double CORE_REWIND_SCRUB_RECORD_MAX = 0.15;   // serialize + encode
-constexpr double CORE_REWIND_SCRUB_LOAD_MAX   = 0.50;   // unserialize (each DVR step and PLAY frame)
-constexpr double CORE_REWIND_SCRUB_TOTAL_MAX  = 0.75;   // the core's frame + serialize
+// AUTO picks SCRUB when (shares of one frame period):
+//   the game thread's serialize (95th percentile) is small, a load (each DVR
+//   step and WATCH frame) fits, the worker's encode (average) keeps up with
+//   room to spare, and it skipped next to nothing while measured.
+// The core's own frame time isn't a criterion: measured paced (as played),
+// a CPU that clocks down between frames makes a light core look busy
+// (SameBoy at 95% of a frame on the RK3588, 35% unpaced); the governor
+// clocks up when there's more to do.
+constexpr double CORE_REWIND_SCRUB_RECORD_MAX = 0.15;   // serialize, on the game's thread
+constexpr double CORE_REWIND_SCRUB_LOAD_MAX   = 0.50;   // unserialize
+constexpr double CORE_REWIND_SCRUB_ENCODE_MAX = 0.50;   // the worker's encode
 constexpr double CORE_REWIND_SCRUB_SKIP_MAX   = 0.05;   // states skipped (the worker behind)
 
 struct CoreRewindMeasure
@@ -82,9 +89,10 @@ struct CoreRewindMeasure
     RewindRecorderStats start_stats = {};
 
     // The verdict's numbers (shares of a frame), for the log and docs/rewind.md.
-    double record = 0.0;
+    double record = 0.0;   // serialize
     double load   = 0.0;
-    double total  = 0.0;
+    double encode = 0.0;
+    double total  = 0.0;   // the core's frame + serialize (shown, not a criterion)
     double skip   = 0.0;
 };
 

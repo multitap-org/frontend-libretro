@@ -121,6 +121,33 @@ void core_session_upload_video(CoreSession* session, AppShell* shell)
     }
 }
 
+bool core_session_copy_picture(CoreSession* session, AppShell* shell, VideoTexture* target)
+{
+    const LibretroVideoFrame* video = &session->host->video;
+    if (!core_session_running(session) || video->pixels == nullptr || video->width == 0 || video->height == 0)
+    {
+        return false;
+    }
+    FramePixelFormat format = frame_texture_format(session->host);
+    if (video->bytes_per_pixel != (format == FramePixelFormat::xrgb8888 ? 4u : 2u))
+    {
+        return false;   // the core just changed its format: run_frame catches up first
+    }
+    if (!video_texture_created(target) || target->format != format || video->width > target->capacity_width ||
+        video->height > target->capacity_height)
+    {
+        // Sized like the session's texture (the core's maximum), so it's made once.
+        uint32_t width = session->texture.capacity_width > video->width ? session->texture.capacity_width : video->width;
+        uint32_t height = session->texture.capacity_height > video->height ? session->texture.capacity_height : video->height;
+        video_texture_destroy(target, shell);
+        if (!video_texture_create(target, shell, width, height, format, true))
+        {
+            return false;
+        }
+    }
+    return app_shell_acquire(shell) && video_texture_upload(target, shell, video->pixels, video->width, video->height);
+}
+
 // ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
@@ -342,11 +369,6 @@ bool core_session_start(CoreSession* session, AppShell* shell, const char* core_
 
     // No sound is not fatal: the core still runs (the reason is logged).
     audio_output_create(&session->audio, session->host->av_info.timing.sample_rate, &session->audio_config);
-
-    if (session->rewind != nullptr)
-    {
-        core_rewind_start(session->rewind, session->host, session->host->av_info.timing.fps);   // logged if it can't
-    }
 
     const char* name = session->host->system_info.library_name;
     set_message(session, "Running %s", name != nullptr ? name : "core");
