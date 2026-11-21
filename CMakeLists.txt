@@ -16,6 +16,7 @@ endif()
 
 add_library(frontend_libretro STATIC
     core_session.cpp
+    core_rewind.cpp
     core_catalog.cpp
     keyboard_input.cpp
     fixed_input.cpp
@@ -85,6 +86,14 @@ if(MULTITAP_BUILD_TESTS)
             FIXTURES_REQUIRED core_catalog_scratch
             PASS_REGULAR_EXPRESSION "core catalog: all checks passed"
             FAIL_REGULAR_EXPRESSION "FAIL ")
+        # host-libretro's test core (its state follows the input, options and resets).
+        add_executable(frontend_core_rewind_test tests/core_rewind_test.cpp)
+        target_link_libraries(frontend_core_rewind_test PRIVATE frontend_libretro)
+        multitap_set_project_flags(frontend_core_rewind_test)
+        add_test(NAME frontend_core_rewind COMMAND frontend_core_rewind_test $<TARGET_FILE:test_core>)
+        set_tests_properties(frontend_core_rewind PROPERTIES
+                             PASS_REGULAR_EXPRESSION "core rewind: all checks passed"
+                             FAIL_REGULAR_EXPRESSION "FAIL|ERROR: AddressSanitizer|ERROR: LeakSanitizer|runtime error:")
     endif()
 
     # Uses frontends-common's archive test data.

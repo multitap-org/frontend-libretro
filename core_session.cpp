@@ -121,6 +121,33 @@ void core_session_upload_video(CoreSession* session, AppShell* shell)
     }
 }
 
+bool core_session_copy_picture(CoreSession* session, AppShell* shell, VideoTexture* target)
+{
+    const LibretroVideoFrame* video = &session->host->video;
+    if (!core_session_running(session) || video->pixels == nullptr || video->width == 0 || video->height == 0)
+    {
+        return false;
+    }
+    FramePixelFormat format = frame_texture_format(session->host);
+    if (video->bytes_per_pixel != (format == FramePixelFormat::xrgb8888 ? 4u : 2u))
+    {
+        return false;   // the core just changed its format: run_frame catches up first
+    }
+    if (!video_texture_created(target) || target->format != format || video->width > target->capacity_width ||
+        video->height > target->capacity_height)
+    {
+        // Sized like the session's texture (the core's maximum), so it's made once.
+        uint32_t width = session->texture.capacity_width > video->width ? session->texture.capacity_width : video->width;
+        uint32_t height = session->texture.capacity_height > video->height ? session->texture.capacity_height : video->height;
+        video_texture_destroy(target, shell);
+        if (!video_texture_create(target, shell, width, height, format, true))
+        {
+            return false;
+        }
+    }
+    return app_shell_acquire(shell) && video_texture_upload(target, shell, video->pixels, video->width, video->height);
+}
+
 // ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
@@ -165,6 +192,10 @@ void core_session_stop(CoreSession* session, AppShell* shell)
     }
     session->timing.missed_total = 0;
     session->timing.caught_up_total = 0;
+    if (session->rewind != nullptr)
+    {
+        core_rewind_stop(session->rewind);
+    }
     destroy_texture(session, shell);
     audio_output_destroy(&session->audio);
     libretro_host_unload_core(session->host);   // writes save RAM first
@@ -567,6 +598,24 @@ static uint64_t fast_forward_budget_ns(const CoreSession* session)
     return static_cast<uint64_t>(CORE_SESSION_FAST_FORWARD_BUDGET * 1e9 / rate);
 }
 
+// The DVR is open: the game waits; PLAY runs the recorded frames, one per
+// frame due, heard and shown like the game's.
+static CoreSessionFrame run_dvr_frame(CoreSession* session, AppShell* shell)
+{
+    if (!core_rewind_dvr_tick(session->rewind))
+    {
+        return CoreSessionFrame::skipped;
+    }
+    audio_output_set_sample_rate(&session->audio, session->host->av_info.timing.sample_rate);
+    audio_output_push(&session->audio, session->host->audio.samples, session->host->audio.frames);
+    const LibretroVideoFrame* video = &session->host->video;
+    if (video->width > 0 && video->height > 0)
+    {
+        ensure_texture(session, shell, video->width, video->height, frame_texture_format(session->host));
+    }
+    return CoreSessionFrame::ran;
+}
+
 CoreSessionFrame core_session_run_frame(CoreSession* session, AppShell* shell, const LibretroInputState* pointer,
                                         bool keyboard_for_joypad)
 {
@@ -579,7 +628,15 @@ CoreSessionFrame core_session_run_frame(CoreSession* session, AppShell* shell, c
     {
         return CoreSessionFrame::skipped;
     }
-    if (!core_session_running(session) || (session->paused && !session->step_once))
+    if (!core_session_running(session))
+    {
+        return CoreSessionFrame::skipped;
+    }
+    if (session->rewind != nullptr && session->rewind->dvr_open)
+    {
+        return run_dvr_frame(session, shell);
+    }
+    if (session->paused && !session->step_once)
     {
         return CoreSessionFrame::skipped;
     }
@@ -637,9 +694,18 @@ CoreSessionFrame core_session_run_frame(CoreSession* session, AppShell* shell, c
         {
             break;
         }
+        if (session->rewind != nullptr)
+        {
+            core_rewind_before_frame(session->rewind, &input);
+        }
         libretro_host_run_frame(session->host);
+        uint64_t frame_ns = SDL_GetTicksNS() - frame_started;
         session->stats.frames++;
-        session->stats.run_ns += SDL_GetTicksNS() - frame_started;
+        session->stats.run_ns += frame_ns;
+        if (session->rewind != nullptr)
+        {
+            core_rewind_after_frame(session->rewind, frame_ns);
+        }
 
         if (session->host->shutdown_requested)
         {
