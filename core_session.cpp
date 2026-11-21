@@ -165,6 +165,10 @@ void core_session_stop(CoreSession* session, AppShell* shell)
     }
     session->timing.missed_total = 0;
     session->timing.caught_up_total = 0;
+    if (session->rewind != nullptr)
+    {
+        core_rewind_stop(session->rewind);
+    }
     destroy_texture(session, shell);
     audio_output_destroy(&session->audio);
     libretro_host_unload_core(session->host);   // writes save RAM first
@@ -339,6 +343,11 @@ bool core_session_start(CoreSession* session, AppShell* shell, const char* core_
     // No sound is not fatal: the core still runs (the reason is logged).
     audio_output_create(&session->audio, session->host->av_info.timing.sample_rate, &session->audio_config);
 
+    if (session->rewind != nullptr)
+    {
+        core_rewind_start(session->rewind, session->host, session->host->av_info.timing.fps);   // logged if it can't
+    }
+
     const char* name = session->host->system_info.library_name;
     set_message(session, "Running %s", name != nullptr ? name : "core");
     return true;
@@ -464,6 +473,24 @@ static uint64_t fast_forward_budget_ns(const CoreSession* session)
     return static_cast<uint64_t>(CORE_SESSION_FAST_FORWARD_BUDGET * 1e9 / rate);
 }
 
+// The DVR is open: the game waits; PLAY runs the recorded frames, one per
+// frame due, heard and shown like the game's.
+static CoreSessionFrame run_dvr_frame(CoreSession* session, AppShell* shell)
+{
+    if (!core_rewind_dvr_tick(session->rewind))
+    {
+        return CoreSessionFrame::skipped;
+    }
+    audio_output_set_sample_rate(&session->audio, session->host->av_info.timing.sample_rate);
+    audio_output_push(&session->audio, session->host->audio.samples, session->host->audio.frames);
+    const LibretroVideoFrame* video = &session->host->video;
+    if (video->width > 0 && video->height > 0)
+    {
+        ensure_texture(session, shell, video->width, video->height, frame_texture_format(session->host));
+    }
+    return CoreSessionFrame::ran;
+}
+
 CoreSessionFrame core_session_run_frame(CoreSession* session, AppShell* shell, const LibretroInputState* pointer,
                                         bool keyboard_for_joypad)
 {
@@ -476,7 +503,15 @@ CoreSessionFrame core_session_run_frame(CoreSession* session, AppShell* shell, c
     {
         return CoreSessionFrame::skipped;
     }
-    if (!core_session_running(session) || (session->paused && !session->step_once))
+    if (!core_session_running(session))
+    {
+        return CoreSessionFrame::skipped;
+    }
+    if (session->rewind != nullptr && session->rewind->dvr_open)
+    {
+        return run_dvr_frame(session, shell);
+    }
+    if (session->paused && !session->step_once)
     {
         return CoreSessionFrame::skipped;
     }
@@ -534,9 +569,18 @@ CoreSessionFrame core_session_run_frame(CoreSession* session, AppShell* shell, c
         {
             break;
         }
+        if (session->rewind != nullptr)
+        {
+            core_rewind_before_frame(session->rewind, &input);
+        }
         libretro_host_run_frame(session->host);
+        uint64_t frame_ns = SDL_GetTicksNS() - frame_started;
         session->stats.frames++;
-        session->stats.run_ns += SDL_GetTicksNS() - frame_started;
+        session->stats.run_ns += frame_ns;
+        if (session->rewind != nullptr)
+        {
+            core_rewind_after_frame(session->rewind, frame_ns);
+        }
 
         if (session->host->shutdown_requested)
         {

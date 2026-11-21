@@ -19,6 +19,7 @@
 #include "audio_output.h"
 #include "core_options_cache.h"
 #include "core_options_store.h"
+#include "core_rewind.h"
 #include "fixed_input.h"
 #include "frame_timing.h"
 #include "keyboard_input.h"
@@ -107,6 +108,11 @@ struct CoreSession
     // frontend's to set.
     bool               external_pads = false;
     LibretroInputState pads          = {};   // joypad_buttons and analog only
+
+    // Rewind (core_rewind.h; not owned, nullptr = none): started with every
+    // game, recorded around every frame; while its DVR is open the session
+    // runs the DVR's PLAY instead of the game.
+    CoreRewind* rewind = nullptr;
 
     CoreSessionStats stats = {};      // reset by every start
     uint32_t state_slot = LIBRETRO_STATE_SLOT_FIRST;   // 1..9

@@ -16,6 +16,7 @@ endif()
 
 add_library(frontend_libretro STATIC
     core_session.cpp
+    core_rewind.cpp
     core_catalog.cpp
     keyboard_input.cpp
     fixed_input.cpp
@@ -70,6 +71,17 @@ if(MULTITAP_BUILD_TESTS)
     multitap_set_project_flags(frontend_core_options_cache_test)
     add_test(NAME frontend_core_options_cache COMMAND frontend_core_options_cache_test)
     set_tests_properties(frontend_core_options_cache PROPERTIES PASS_REGULAR_EXPRESSION "core options cache: all checks passed")
+    # host-libretro's test core (its state follows the input, options and resets).
+    if(TARGET test_core)
+        add_executable(frontend_core_rewind_test tests/core_rewind_test.cpp)
+        target_link_libraries(frontend_core_rewind_test PRIVATE frontend_libretro)
+        multitap_set_project_flags(frontend_core_rewind_test)
+        add_test(NAME frontend_core_rewind COMMAND frontend_core_rewind_test $<TARGET_FILE:test_core>)
+        set_tests_properties(frontend_core_rewind PROPERTIES
+                             PASS_REGULAR_EXPRESSION "core rewind: all checks passed"
+                             FAIL_REGULAR_EXPRESSION "FAIL|ERROR: AddressSanitizer|ERROR: LeakSanitizer|runtime error:")
+    endif()
+
     # Uses frontends-common's archive test data.
     add_executable(frontend_content_archive_test tests/content_archive_test.cpp)
     target_link_libraries(frontend_content_archive_test PRIVATE frontend_libretro)
