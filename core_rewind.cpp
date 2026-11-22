@@ -106,6 +106,13 @@ static void destroy_recorder(CoreRewind* rewind)
         rewind_recorder_destroy(&rewind->recorder);
         rewind->has_recorder = false;
     }
+    // The kept lane goes with the history it was cut from (its sizes too).
+    if (rewind->kept.arena != nullptr)
+    {
+        rewind_buffer_destroy(&rewind->kept);
+    }
+    rewind->has_kept  = false;
+    rewind->on_kept   = false;
     rewind->has_state = false;
 }
 
@@ -219,6 +226,7 @@ static void close_cursor(CoreRewind* rewind)
         rewind_cursor_destroy(&rewind->cursor);
         rewind->dvr_open = false;
         rewind->playing  = false;
+        rewind->on_kept  = false;   // the next open starts on the recorded lane
     }
 }
 
@@ -446,9 +454,20 @@ void core_rewind_after_frame(CoreRewind* rewind, uint64_t frame_ns)
 // The DVR
 // ---------------------------------------------------------------------------
 
+// The history the cursor walks: the recorded one, or the kept lane.
+static RewindBuffer* lane_buffer(CoreRewind* rewind)
+{
+    return rewind->on_kept ? &rewind->kept : &rewind->recorder.buffer;
+}
+
+const RewindBuffer* core_rewind_dvr_buffer(const CoreRewind* rewind)
+{
+    return rewind->on_kept ? &rewind->kept : &rewind->recorder.buffer;
+}
+
 static const RewindRecord* cursor_record(const CoreRewind* rewind)
 {
-    return rewind_buffer_record(&rewind->recorder.buffer, rewind->cursor.position);
+    return rewind_buffer_record(core_rewind_dvr_buffer(rewind), rewind->cursor.position);
 }
 
 // The frame the game is at after a record: an input's frame has run.
@@ -457,16 +476,11 @@ static uint64_t frame_after(const RewindRecord* record)
     return record->kind == RewindRecordKind::input ? record->frame + 1 : record->frame;
 }
 
-// Where the lanes part and where the kept one ends (scans the index once).
+// Where the kept lane ends.
 static void read_lanes(CoreRewind* rewind)
 {
-    const RewindBuffer* buffer = &rewind->recorder.buffer;
-    uint32_t fork   = 0;
-    uint32_t newest = 0;
-    rewind->lanes = rewind_buffer_fork_point(buffer, &fork) &&
-                    rewind_buffer_lane_newest(buffer, rewind_buffer_kept_lane(buffer), &newest);
-    rewind->fork_frame  = rewind->lanes ? frame_after(rewind_buffer_record(buffer, fork)) : 0;
-    rewind->kept_newest = rewind->lanes ? frame_after(rewind_buffer_record(buffer, newest)) : 0;
+    rewind->has_kept    = rewind->has_kept && rewind->kept.count > 0;
+    rewind->kept_newest = rewind->has_kept ? frame_after(rewind_buffer_record(&rewind->kept, rewind->kept.count - 1)) : 0;
 }
 
 bool core_rewind_dvr_open(CoreRewind* rewind)
@@ -476,6 +490,7 @@ bool core_rewind_dvr_open(CoreRewind* rewind)
         return false;
     }
     rewind_recorder_pause(&rewind->recorder);
+    rewind->on_kept      = false;
     RewindBuffer* buffer = &rewind->recorder.buffer;
     bool ok = buffer->states > 0 && libretro_host_serialize_to(rewind->host, rewind->live, rewind->state_size) &&
               rewind_cursor_create(&rewind->cursor, buffer);
@@ -508,7 +523,7 @@ bool core_rewind_dvr_open(CoreRewind* rewind)
 // frame run with its own input. The core is then one frame past the cursor.
 static bool show(CoreRewind* rewind)
 {
-    RewindBuffer* buffer = &rewind->recorder.buffer;
+    RewindBuffer* buffer = lane_buffer(rewind);
     if (!libretro_host_unserialize(rewind->host, rewind->cursor.state, rewind->state_size))
     {
         return false;
@@ -536,7 +551,7 @@ bool core_rewind_dvr_step(CoreRewind* rewind, int32_t steps)
         return false;
     }
     rewind->playing      = false;
-    RewindBuffer* buffer = &rewind->recorder.buffer;
+    RewindBuffer* buffer = lane_buffer(rewind);
     bool          moved  = false;
     int32_t       left   = steps < 0 ? -steps : steps;
     for (int32_t i = 0; i < left; i++)
@@ -564,7 +579,7 @@ bool core_rewind_dvr_seek(CoreRewind* rewind, uint64_t frame)
         return false;
     }
     rewind->playing      = false;
-    RewindBuffer* buffer = &rewind->recorder.buffer;
+    RewindBuffer* buffer = lane_buffer(rewind);
     if (cursor_record(rewind)->kind != RewindRecordKind::state)
     {
         rewind_cursor_back_to_state(buffer, &rewind->cursor);
@@ -598,7 +613,7 @@ bool core_rewind_dvr_tick(CoreRewind* rewind)
     {
         return false;
     }
-    RewindBuffer* buffer = &rewind->recorder.buffer;
+    RewindBuffer* buffer = lane_buffer(rewind);
     if (!rewind->synced)
     {
         if (cursor_record(rewind)->kind != RewindRecordKind::state &&
@@ -662,13 +677,69 @@ bool core_rewind_dvr_tick(CoreRewind* rewind)
     }
 }
 
+static uint64_t earlier(uint64_t a, uint64_t b)
+{
+    return a < b ? a : b;
+}
+
+// B's lanes, the cursor at `here` (the frame recording goes on from):
+//   - on the kept lane: it's cut there and becomes the recorded history; the
+//     recorded one, whole, is the kept lane now (the two swap, nothing copied).
+//   - on the recorded lane with a state after the cursor: the history is
+//     copied into the kept lane first (the old kept lane goes), then cut.
+//   - on the recorded lane with only inputs after the cursor (B right after
+//     opening): just cut; the kept lane stays.
+static void keep_future(CoreRewind* rewind, uint64_t here)
+{
+    RewindBuffer* recorded = &rewind->recorder.buffer;
+    if (rewind->on_kept)
+    {
+        rewind_buffer_truncate(&rewind->kept, &rewind->cursor);
+        RewindBuffer swap = *recorded;
+        *recorded         = rewind->kept;
+        rewind->kept      = swap;
+        rewind->fork_frame = earlier(rewind->fork_frame, here);
+        rewind->on_kept   = false;
+        return;
+    }
+    bool ahead = false;
+    for (uint32_t i = rewind->cursor.position + 1; i < recorded->count && !ahead; i++)
+    {
+        ahead = rewind_buffer_record(recorded, i)->kind == RewindRecordKind::state;
+    }
+    if (ahead)
+    {
+        bool ready = rewind->kept.arena != nullptr || rewind_buffer_create(&rewind->kept, &recorded->config);
+        uint64_t started = SDL_GetTicksNS();
+        if (ready && rewind_buffer_copy(&rewind->kept, recorded))
+        {
+            rewind->has_kept   = true;
+            rewind->fork_frame = here;
+            host_log(LogLevel::info, "Rewind: the future after frame %llu kept as a lane (%zu MB copied in %.1f ms)",
+                     static_cast<unsigned long long>(here), rewind_buffer_bytes_used(recorded) >> 20,
+                     static_cast<double>(SDL_GetTicksNS() - started) / 1e6);
+        }
+        else
+        {
+            host_log(LogLevel::warning, "Rewind: no memory for a kept lane, the future after frame %llu is dropped",
+                     static_cast<unsigned long long>(here));
+            rewind->has_kept = false;
+        }
+    }
+    else if (rewind->has_kept)
+    {
+        rewind->fork_frame = earlier(rewind->fork_frame, here);
+    }
+    rewind_buffer_truncate(recorded, &rewind->cursor);
+}
+
 void core_rewind_dvr_resume_here(CoreRewind* rewind)
 {
     if (!rewind->dvr_open)
     {
         return;
     }
-    RewindBuffer*       buffer = &rewind->recorder.buffer;
+    RewindBuffer*       buffer = lane_buffer(rewind);
     const RewindRecord* record = cursor_record(rewind);
     if (record->kind == RewindRecordKind::input && rewind->synced)
     {
@@ -689,7 +760,7 @@ void core_rewind_dvr_resume_here(CoreRewind* rewind)
         rewind->last_state_frame = record->frame;   // the cursor's state is the newest: frame `frame` runs next
         rewind->force_state      = false;
     }
-    rewind_buffer_fork(buffer, &rewind->cursor);
+    keep_future(rewind, frame_after(record));
     rewind->valve_frame = rewind->frame;
     close_cursor(rewind);
     rewind_recorder_resume(&rewind->recorder);
@@ -697,24 +768,47 @@ void core_rewind_dvr_resume_here(CoreRewind* rewind)
 
 bool core_rewind_dvr_switch_lane(CoreRewind* rewind)
 {
-    if (!rewind->dvr_open)
+    if (!rewind->dvr_open || !rewind->has_kept)
     {
         return false;
     }
-    rewind->playing      = false;
-    RewindBuffer* buffer = &rewind->recorder.buffer;
+    rewind->playing    = false;
+    RewindBuffer* from = lane_buffer(rewind);
+    RewindBuffer* to   = rewind->on_kept ? &rewind->recorder.buffer : &rewind->kept;
     if (cursor_record(rewind)->kind != RewindRecordKind::state)
     {
-        rewind_cursor_back_to_state(buffer, &rewind->cursor);
+        rewind_cursor_back_to_state(from, &rewind->cursor);
     }
-    if (!rewind_cursor_switch_lane(buffer, &rewind->cursor))
+    // The other lane's newest state at or before the cursor's frame (or its oldest).
+    uint64_t frame  = cursor_record(rewind)->frame;
+    uint32_t target = 0;
+    for (uint32_t i = 0; i < to->count; i++)
     {
-        return false;
+        const RewindRecord* record = rewind_buffer_record(to, i);
+        if (record->kind == RewindRecordKind::state && record->frame <= frame)
+        {
+            target = i;
+        }
     }
-    if (cursor_record(rewind)->kind != RewindRecordKind::state)
+    const RewindRecord* there = rewind_buffer_record(to, target);
+    if (frame < rewind->fork_frame && there->frame == frame)
     {
-        rewind_cursor_back_to_state(buffer, &rewind->cursor);
+        // Before the fork both lanes are the same game: the cursor's state
+        // and input are already the ones there.
+        rewind->cursor.position = target;
     }
+    else
+    {
+        // Down from the other lane's newest.
+        if (!rewind_cursor_to_newest(to, &rewind->cursor))
+        {
+            return false;
+        }
+        while (rewind->cursor.position > target && rewind_cursor_back(to, &rewind->cursor))
+        {
+        }
+    }
+    rewind->on_kept = !rewind->on_kept;
     return show(rewind);
 }
 
@@ -738,12 +832,12 @@ void core_rewind_dvr_position(const CoreRewind* rewind, CoreRewindPosition* posi
     {
         return;
     }
-    const RewindBuffer* buffer = &rewind->recorder.buffer;
+    const RewindBuffer* buffer = core_rewind_dvr_buffer(rewind);
     position->oldest = rewind_buffer_record(buffer, 0)->frame;
     position->cursor = cursor_record(rewind)->frame;
     position->states = buffer->states;
-    position->lanes       = rewind->lanes;
-    position->on_kept     = rewind->lanes && rewind->cursor.lane != buffer->lane;
+    position->lanes       = rewind->has_kept;
+    position->on_kept     = rewind->has_kept && rewind->on_kept;
     position->fork        = rewind->fork_frame;
     position->kept_newest = rewind->kept_newest;
 }

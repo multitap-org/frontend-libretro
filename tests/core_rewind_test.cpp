@@ -13,8 +13,9 @@
 //   LANES: B keeps the future it left as the kept lane; switching shows the
 //   other lane's game at the same frame; B on the kept lane plays on there
 //   and the lane it left becomes the kept one; B with no state ahead keeps
-//   the kept lane; when the history is full the kept lane goes before any
-//   old frame does (SCRUB and SNAPSHOTS).
+//   the kept lane; the kept lane is a history of its own, as big as the
+//   recorded one, and outlives the recorded history wrapping past the fork
+//   (SCRUB and SNAPSHOTS).
 //
 // Usage: frontend_core_rewind_test <test core>
 // Exit code 0 = all checks passed. Each failure is printed.
@@ -367,19 +368,21 @@ static void test_lanes(LibretroHost* host)
     core_rewind_stop(&rewind);
 }
 
-// The history full: the kept lane goes before any old frame does. Tiny
-// states: the record index fills first (SCRUB), or the arena (SNAPSHOTS).
-static void test_lane_eviction(LibretroHost* host, RewindMode mode)
+// The kept lane has its own history, as big as the recorded one (Andrés:
+// "same size buffer as the original"): the recorded history fills and wraps
+// until it no longer holds the fork, and the kept lane is still whole.
+// Tiny states: the record index fills first (SCRUB) or the arena (SNAPSHOTS).
+static void test_lane_survives(LibretroHost* host, RewindMode mode)
 {
-    const char* name = mode == RewindMode::scrub ? "eviction scrub" : "eviction snapshots";
+    const char* name = mode == RewindMode::scrub ? "survives scrub" : "survives snapshots";
     char what[96] = {};
     CoreRewind rewind = {};
     rewind.settings.mode = mode;
     rewind.settings.memory_bytes = (static_cast<size_t>(4) << 20) + 4096;
     rewind.settings.snapshot_seconds = 1;
     g_expected.clear();
-    check(core_rewind_start(&rewind, host, 60.0), "eviction: started");
-    // Until the history is full (old frames dropped).
+    std::snprintf(what, sizeof(what), "%s: started", name);
+    check(core_rewind_start(&rewind, host, 60.0), what);
     uint32_t played = 0;
     while (rewind.recorder.buffer.dropped == 0 && played < 400000)
     {
@@ -388,40 +391,45 @@ static void test_lane_eviction(LibretroHost* host, RewindMode mode)
     }
     std::snprintf(what, sizeof(what), "%s: the history fills (%u frames)", name, played);
     check(rewind.recorder.buffer.dropped > 0, what);
+    std::vector<uint64_t> game_a = g_expected;
 
-    check(core_rewind_dvr_open(&rewind), "eviction: open");
-    check(core_rewind_dvr_step(&rewind, mode == RewindMode::scrub ? -120 : -2), "eviction: step back");
-    core_rewind_dvr_resume_here(&rewind);
+    std::snprintf(what, sizeof(what), "%s: B a bit back", name);
+    check(core_rewind_dvr_open(&rewind) && core_rewind_dvr_step(&rewind, mode == RewindMode::scrub ? -120 : -2), what);
     CoreRewindPosition position = {};
-    check(core_rewind_dvr_open(&rewind), "eviction: open after B");
     core_rewind_dvr_position(&rewind, &position);
-    std::snprintf(what, sizeof(what), "%s: a kept lane", name);
-    check(position.lanes, what);
-    uint64_t oldest  = position.oldest;
-    uint64_t dropped = rewind.recorder.buffer.dropped;
-    core_rewind_dvr_close(&rewind);
+    uint64_t fork = position.cursor;
+    uint64_t kept_oldest = position.oldest;
+    core_rewind_dvr_resume_here(&rewind);
+    std::snprintf(what, sizeof(what), "%s: the kept lane is as big as the history", name);
+    check(rewind.has_kept && rewind.kept.config.arena_bytes == rewind.recorder.buffer.config.arena_bytes &&
+              rewind.kept.config.max_records == rewind.recorder.buffer.config.max_records,
+          what);
 
-    // Play until the kept lane goes: no old record may go before it.
-    bool kept_first = true;
-    bool gone = false;
-    for (uint32_t i = 0; i < 100000 && !gone; i++)
+    // Play until the recorded history no longer reaches back to the fork.
+    for (uint32_t i = 0; i < 1000 && rewind_buffer_record(&rewind.recorder.buffer, 0)->frame <= fork; i++)
     {
-        play(&rewind, host, 1, 13);
-        gone = rewind.recorder.buffer.kept == 0;
-        kept_first = kept_first && rewind.recorder.buffer.dropped == dropped;
+        play(&rewind, host, 100, 13);
     }
-    std::snprintf(what, sizeof(what), "%s: the kept lane goes first", name);
-    check(gone && kept_first, what);
-    check(core_rewind_dvr_open(&rewind), "eviction: open at the end");
+    std::snprintf(what, sizeof(what), "%s: the recorded history wrapped past the fork", name);
+    check(rewind_buffer_record(&rewind.recorder.buffer, 0)->frame > fork, what);
+
+    check(core_rewind_dvr_open(&rewind), "survives: open");
     core_rewind_dvr_position(&rewind, &position);
-    std::snprintf(what, sizeof(what), "%s: the oldest frame kept, one lane", name);
-    check(!position.lanes && position.oldest == oldest, what);
-    bool sought = core_rewind_dvr_seek(&rewind, position.oldest + 1);
+    std::snprintf(what, sizeof(what), "%s: the kept lane is still there", name);
+    check(position.lanes && position.fork == fork, what);
+    std::snprintf(what, sizeof(what), "%s: switched to it", name);
+    check(core_rewind_dvr_switch_lane(&rewind), what);
     core_rewind_dvr_position(&rewind, &position);
-    check(sought && at_expected(host, position.cursor + 1),
-          "eviction: the oldest frame shown right");
+    std::snprintf(what, sizeof(what), "%s: whole, from its oldest frame", name);
+    check(position.on_kept && position.oldest == kept_oldest, what);
+    std::snprintf(what, sizeof(what), "%s: its old frames shown right", name);
+    check(core_rewind_dvr_seek(&rewind, kept_oldest + 200), what);
+    core_rewind_dvr_position(&rewind, &position);
+    check(at_game(host, &game_a, position.cursor + 1), what);
     core_rewind_dvr_close(&rewind);
     core_rewind_stop(&rewind);
+    std::snprintf(what, sizeof(what), "%s: stop frees the kept lane", name);
+    check(!rewind.has_kept && rewind.kept.arena == nullptr, what);
 }
 
 int main(int argc, char** argv)
@@ -440,8 +448,8 @@ int main(int argc, char** argv)
     test_snapshots(host);
     test_auto(host);
     test_lanes(host);
-    test_lane_eviction(host, RewindMode::scrub);
-    test_lane_eviction(host, RewindMode::snapshots);
+    test_lane_survives(host, RewindMode::scrub);
+    test_lane_survives(host, RewindMode::snapshots);
 
     libretro_host_unload_core(host);
     delete host;
