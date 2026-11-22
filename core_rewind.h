@@ -20,9 +20,16 @@
 // The DVR (decided by Andrés, 2026-11-20): opened by a hotkey, the game
 // stops. Moving shows the picture at the cursor (the state loaded and one
 // frame run). Y plays the recorded game from the cursor, B plays on from
-// the cursor (what's after it is dropped), A goes back to the present (the
-// game as it was when the DVR opened). Nothing after the cursor is dropped
-// until B.
+// the cursor, A goes back to the present (the game as it was when the DVR
+// opened).
+//
+// Two lanes (Andrés, 2026-11-22, "Timelines: two for now"): B keeps the
+// future it leaves as a second lane (rewind_buffer's fork: shared records,
+// the recorded lane, the kept lane). The DVR switches between them; B on
+// the kept lane plays on there and the lane it left is kept instead. Only
+// the last abandoned future is kept, in the history's own memory, and it is
+// the first thing to go when room is needed. A lane's states carry the
+// game's SRAM, so playing on from one brings its save back.
 //
 // Known gap: core options aren't in a state. Going back across an option
 // change keeps the option as it is now; PLAY over it applies it.
@@ -131,6 +138,10 @@ struct CoreRewind
     uint8_t*     live       = nullptr;   // the game when the DVR opened (A)
     uint8_t*     check      = nullptr;   // PLAY's determinism check
     uint64_t     mismatches = 0;         // replayed states that differ from the recorded ones
+    // The kept lane, read at open (nothing records or forks while it's open).
+    bool         lanes       = false;
+    uint64_t     fork_frame  = 0;
+    uint64_t     kept_newest = 0;
 };
 
 // Starts recording for the game just loaded in `host` (settings set before).
@@ -159,8 +170,12 @@ void core_rewind_dvr_set_playing(CoreRewind* rewind, bool playing);
 // picture in host->video, its audio in host->audio). False when nothing ran
 // (not playing, or the end of the history: playing stops).
 bool core_rewind_dvr_tick(CoreRewind* rewind);
-// B: plays on from the cursor; what's after it is dropped.
+// B: plays on from the cursor, on the cursor's lane; the future it leaves
+// becomes the kept lane (rewind_buffer_fork).
 void core_rewind_dvr_resume_here(CoreRewind* rewind);
+// To the other lane, at its state nearest the cursor's frame, shown. False
+// if there's no kept lane.
+bool core_rewind_dvr_switch_lane(CoreRewind* rewind);
 // A: back to the game as it was when the DVR opened.
 void core_rewind_dvr_close(CoreRewind* rewind);
 
@@ -170,6 +185,12 @@ struct CoreRewindPosition
     uint64_t oldest = 0;   // frame of the oldest state
     uint64_t newest = 0;   // the frame the game had reached
     uint64_t cursor = 0;   // frame at the cursor
-    uint32_t states = 0;
+    uint32_t states = 0;   // on the recorded lane
+
+    // The kept lane (lanes false: there's none).
+    bool     lanes       = false;
+    bool     on_kept     = false;   // the cursor is on the kept lane
+    uint64_t fork        = 0;       // the frame where the lanes part
+    uint64_t kept_newest = 0;       // the frame the kept lane had reached
 };
 void core_rewind_dvr_position(const CoreRewind* rewind, CoreRewindPosition* position);

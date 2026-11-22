@@ -10,6 +10,11 @@
 //   between snapshots exactly (no determinism mismatches).
 //   AUTO: measures and picks SCRUB for this cheap core; a known verdict
 //   skips the measurement.
+//   LANES: B keeps the future it left as the kept lane; switching shows the
+//   other lane's game at the same frame; B on the kept lane plays on there
+//   and the lane it left becomes the kept one; B with no state ahead keeps
+//   the kept lane; when the history is full the kept lane goes before any
+//   old frame does (SCRUB and SNAPSHOTS).
 //
 // Usage: frontend_core_rewind_test <test core>
 // Exit code 0 = all checks passed. Each failure is printed.
@@ -93,6 +98,21 @@ static bool at_expected(LibretroHost* host, uint64_t frame)
     return frame < g_expected.size() && core_state(host) == g_expected[frame];
 }
 
+// The same against a lane's game saved before another one was played.
+static bool at_game(LibretroHost* host, const std::vector<uint64_t>* game, uint64_t frame)
+{
+    return frame < game->size() && core_state(host) == (*game)[frame];
+}
+
+static void print_position(const CoreRewindPosition* position)
+{
+    std::printf("  oldest %llu newest %llu cursor %llu states %u lanes %d on_kept %d fork %llu kept_newest %llu\n",
+                static_cast<unsigned long long>(position->oldest), static_cast<unsigned long long>(position->newest),
+                static_cast<unsigned long long>(position->cursor), position->states, position->lanes ? 1 : 0,
+                position->on_kept ? 1 : 0, static_cast<unsigned long long>(position->fork),
+                static_cast<unsigned long long>(position->kept_newest));
+}
+
 static void test_scrub(LibretroHost* host)
 {
     CoreRewind rewind = {};
@@ -153,7 +173,7 @@ static void test_scrub(LibretroHost* host)
     play(&rewind, host, 40, 99);
     check(core_rewind_dvr_open(&rewind), "scrub: DVR after B");
     core_rewind_dvr_position(&rewind, &position);
-    check(position.newest == 240 && position.states == 240, "scrub: the future after B was dropped");
+    check(position.newest == 240 && position.states == 240, "scrub: after B the recorded lane is the new future");
     check(core_rewind_dvr_seek(&rewind, 220) && at_expected(host, 221), "scrub: the new branch recorded");
     check(core_rewind_dvr_seek(&rewind, 150) && at_expected(host, 151), "scrub: before B still right");
 
@@ -255,6 +275,155 @@ static void test_auto(LibretroHost* host)
     core_rewind_stop(&rewind);
 }
 
+// Two lanes in SCRUB: A (frames 0..300), B played from 200, C from A's 290.
+static void test_lanes(LibretroHost* host)
+{
+    CoreRewind rewind = {};
+    rewind.settings.mode = RewindMode::scrub;
+    rewind.settings.memory_bytes = static_cast<size_t>(16) << 20;
+    g_expected.clear();
+    check(core_rewind_start(&rewind, host, 60.0), "lanes: started");
+    play(&rewind, host, 300, 1);
+    std::vector<uint64_t> game_a = g_expected;
+
+    // Fork: B at 200 keeps 201..300 as the kept lane.
+    check(core_rewind_dvr_open(&rewind), "lanes: DVR opens");
+    CoreRewindPosition position = {};
+    core_rewind_dvr_position(&rewind, &position);
+    check(!position.lanes && !core_rewind_dvr_switch_lane(&rewind), "lanes: one lane before any B");
+    check(core_rewind_dvr_seek(&rewind, 200), "lanes: seek 200");
+    core_rewind_dvr_resume_here(&rewind);
+    play(&rewind, host, 60, 99);
+    std::vector<uint64_t> game_b = g_expected;
+    check(game_b[230] != game_a[230], "lanes: B differs from A");
+    check(core_rewind_dvr_open(&rewind), "lanes: DVR after B");
+    core_rewind_dvr_position(&rewind, &position);
+    if (!position.lanes || position.on_kept || position.fork != 200 || position.kept_newest != 300 ||
+        position.newest != 260)
+    {
+        print_position(&position);
+    }
+    check(position.lanes && !position.on_kept && position.fork != 0 && position.fork == 200 &&
+              position.kept_newest == 300 && position.newest == 260,
+          "lanes: fork, B recorded, A's future kept");
+
+    // Switch: the same frame on the other lane.
+    check(core_rewind_dvr_seek(&rewind, 230) && at_game(host, &game_b, 231), "lanes: B at 230");
+    check(core_rewind_dvr_switch_lane(&rewind), "lanes: switch to the kept lane");
+    core_rewind_dvr_position(&rewind, &position);
+    check(position.on_kept && position.cursor == 230 && at_game(host, &game_a, 231), "lanes: A at 230");
+    check(core_rewind_dvr_step(&rewind, 20) && at_game(host, &game_a, 251), "lanes: steps along A");
+    check(core_rewind_dvr_seek(&rewind, 280) && at_game(host, &game_a, 281), "lanes: A past B's end");
+    check(core_rewind_dvr_switch_lane(&rewind), "lanes: switch back");
+    core_rewind_dvr_position(&rewind, &position);
+    check(!position.on_kept && position.cursor == 259 && at_game(host, &game_b, 260), "lanes: B's newest state");
+    check(core_rewind_dvr_seek(&rewind, 100) && core_rewind_dvr_switch_lane(&rewind) &&
+              at_game(host, &game_a, 101),
+          "lanes: before the fork both lanes are the same game");
+
+    // PLAY on the kept lane replays A.
+    check(core_rewind_dvr_seek(&rewind, 270), "lanes: A at 270");
+    core_rewind_dvr_set_playing(&rewind, true);
+    bool replayed = true;
+    for (uint64_t i = 1; i <= 10; i++)
+    {
+        replayed = replayed && core_rewind_dvr_tick(&rewind) && at_game(host, &game_a, 270 + i);
+    }
+    check(replayed, "lanes: PLAY on the kept lane replays it");
+    core_rewind_dvr_set_playing(&rewind, false);
+
+    // B on the kept lane: A goes on from 290, B becomes the kept lane.
+    check(core_rewind_dvr_seek(&rewind, 290), "lanes: A at 290");
+    core_rewind_dvr_resume_here(&rewind);
+    check(rewind.frame == 290 && at_game(host, &game_a, 290), "lanes: B on the kept lane loads A");
+    play(&rewind, host, 30, 5);
+    std::vector<uint64_t> game_c = g_expected;
+    check(core_rewind_dvr_open(&rewind), "lanes: DVR after B on the kept lane");
+    core_rewind_dvr_position(&rewind, &position);
+    if (!position.lanes || position.fork != 200 || position.kept_newest != 260 || position.newest != 320)
+    {
+        print_position(&position);
+    }
+    check(position.lanes && !position.on_kept && position.fork == 200 && position.kept_newest == 260 &&
+              position.newest == 320,
+          "lanes: the switched-from lane (B) is now the kept one");
+    check(core_rewind_dvr_seek(&rewind, 250) && at_game(host, &game_a, 251), "lanes: the recorded lane is A");
+    check(core_rewind_dvr_seek(&rewind, 300) && at_game(host, &game_c, 301), "lanes: and A's new future");
+    check(core_rewind_dvr_switch_lane(&rewind), "lanes: switch from 300");
+    core_rewind_dvr_position(&rewind, &position);
+    check(position.on_kept && position.cursor == 259 && at_game(host, &game_b, 260), "lanes: B's newest from 300");
+    check(core_rewind_dvr_seek(&rewind, 250) && at_game(host, &game_b, 251), "lanes: the kept lane is B");
+
+    // B right after opening (nothing moved, only the newest frame's input
+    // after the cursor): the kept lane stays.
+    core_rewind_dvr_close(&rewind);
+    check(core_rewind_dvr_open(&rewind), "lanes: open again");
+    core_rewind_dvr_resume_here(&rewind);
+    play(&rewind, host, 5, 5);
+    check(core_rewind_dvr_open(&rewind), "lanes: open after B at the newest");
+    core_rewind_dvr_position(&rewind, &position);
+    check(position.lanes && position.kept_newest == 260, "lanes: B at the newest keeps the kept lane");
+    core_rewind_dvr_close(&rewind);
+    core_rewind_stop(&rewind);
+}
+
+// The history full: the kept lane goes before any old frame does. Tiny
+// states: the record index fills first (SCRUB), or the arena (SNAPSHOTS).
+static void test_lane_eviction(LibretroHost* host, RewindMode mode)
+{
+    const char* name = mode == RewindMode::scrub ? "eviction scrub" : "eviction snapshots";
+    char what[96] = {};
+    CoreRewind rewind = {};
+    rewind.settings.mode = mode;
+    rewind.settings.memory_bytes = (static_cast<size_t>(4) << 20) + 4096;
+    rewind.settings.snapshot_seconds = 1;
+    g_expected.clear();
+    check(core_rewind_start(&rewind, host, 60.0), "eviction: started");
+    // Until the history is full (old frames dropped).
+    uint32_t played = 0;
+    while (rewind.recorder.buffer.dropped == 0 && played < 400000)
+    {
+        play(&rewind, host, 100, 11);
+        played += 100;
+    }
+    std::snprintf(what, sizeof(what), "%s: the history fills (%u frames)", name, played);
+    check(rewind.recorder.buffer.dropped > 0, what);
+
+    check(core_rewind_dvr_open(&rewind), "eviction: open");
+    check(core_rewind_dvr_step(&rewind, mode == RewindMode::scrub ? -120 : -2), "eviction: step back");
+    core_rewind_dvr_resume_here(&rewind);
+    CoreRewindPosition position = {};
+    check(core_rewind_dvr_open(&rewind), "eviction: open after B");
+    core_rewind_dvr_position(&rewind, &position);
+    std::snprintf(what, sizeof(what), "%s: a kept lane", name);
+    check(position.lanes, what);
+    uint64_t oldest  = position.oldest;
+    uint64_t dropped = rewind.recorder.buffer.dropped;
+    core_rewind_dvr_close(&rewind);
+
+    // Play until the kept lane goes: no old record may go before it.
+    bool kept_first = true;
+    bool gone = false;
+    for (uint32_t i = 0; i < 100000 && !gone; i++)
+    {
+        play(&rewind, host, 1, 13);
+        gone = rewind.recorder.buffer.kept == 0;
+        kept_first = kept_first && rewind.recorder.buffer.dropped == dropped;
+    }
+    std::snprintf(what, sizeof(what), "%s: the kept lane goes first", name);
+    check(gone && kept_first, what);
+    check(core_rewind_dvr_open(&rewind), "eviction: open at the end");
+    core_rewind_dvr_position(&rewind, &position);
+    std::snprintf(what, sizeof(what), "%s: the oldest frame kept, one lane", name);
+    check(!position.lanes && position.oldest == oldest, what);
+    bool sought = core_rewind_dvr_seek(&rewind, position.oldest + 1);
+    core_rewind_dvr_position(&rewind, &position);
+    check(sought && at_expected(host, position.cursor + 1),
+          "eviction: the oldest frame shown right");
+    core_rewind_dvr_close(&rewind);
+    core_rewind_stop(&rewind);
+}
+
 int main(int argc, char** argv)
 {
     if (argc < 2)
@@ -270,6 +439,9 @@ int main(int argc, char** argv)
     test_scrub(host);
     test_snapshots(host);
     test_auto(host);
+    test_lanes(host);
+    test_lane_eviction(host, RewindMode::scrub);
+    test_lane_eviction(host, RewindMode::snapshots);
 
     libretro_host_unload_core(host);
     delete host;
