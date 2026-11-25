@@ -882,11 +882,14 @@ bool core_session_load_state(CoreSession* session)
     return true;
 }
 
-void core_session_change_slot(CoreSession* session, int32_t delta)
+void core_session_change_slot(CoreSession* session, int32_t delta, uint32_t first, uint32_t last)
 {
-    // Wraps around within 1..9.
-    int32_t first = static_cast<int32_t>(LIBRETRO_STATE_SLOT_FIRST);
-    int32_t slots = static_cast<int32_t>(LIBRETRO_STATE_SLOT_LAST - LIBRETRO_STATE_SLOT_FIRST + 1);
-    int32_t index = static_cast<int32_t>(session->state_slot) - first + delta;
-    session->state_slot = static_cast<uint32_t>(first + (index % slots + slots) % slots);
+    if (last < first)
+    {
+        return;
+    }
+    int32_t start = static_cast<int32_t>(first);
+    int32_t slots = static_cast<int32_t>(last - first + 1);
+    int32_t index = static_cast<int32_t>(session->state_slot) - start + delta;
+    session->state_slot = static_cast<uint32_t>(start + (index % slots + slots) % slots);
 }
