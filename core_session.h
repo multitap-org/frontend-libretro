@@ -116,7 +116,7 @@ struct CoreSession
     CoreRewind* rewind = nullptr;
 
     CoreSessionStats stats = {};      // reset by every start
-    uint32_t state_slot = LIBRETRO_STATE_SLOT_FIRST;   // 1..9
+    uint32_t state_slot = 0;          // any number: the frontend keeps it within the slots it offers
 
     char message[512] = {};           // what the last start/stop/state call did, for the UI
 };
@@ -231,7 +231,9 @@ struct StateSlotInfo
 bool core_session_save_state(CoreSession* session, const StateThumbnail* thumbnail);
 bool core_session_load_state(CoreSession* session);
 
-// What slot `slot` (1..9) holds for the running game. False if nothing runs
+// What slot `slot` holds for the running game. False if nothing runs
 // or there's no states folder.
 bool core_session_slot_info(const CoreSession* session, uint32_t slot, StateSlotInfo* info);
-void core_session_change_slot(CoreSession* session, int32_t delta);
+// `state_slot` moved by `delta`, wrapping around within first..last (the
+// frontend's own range).
+void core_session_change_slot(CoreSession* session, int32_t delta, uint32_t first, uint32_t last);
