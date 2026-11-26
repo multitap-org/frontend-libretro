@@ -53,6 +53,12 @@ void core_updater_poll(CoreUpdater*)
 {
 }
 
+bool core_updater_load_kept_index(CoreIndex* index, const char*, const char*)
+{
+    *index = {};
+    return false;
+}
+
 void core_updater_progress(CoreUpdater*, int64_t* received, int64_t* total)
 {
     *received = 0;
