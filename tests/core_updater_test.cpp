@@ -92,6 +92,10 @@ int main(int argc, char** argv)
     check(core_updater_available(), "available in this build");
     check(core_updater_key_count() >= 1 && std::strlen(core_updater_key_hex(0)) == 64, "project key present");
 
+    std::remove((cores + "/index.cfg").c_str());   // a run before this one kept it
+    CoreIndex kept;
+    check(!core_updater_load_kept_index(&kept, cores.c_str(), "test-target"), "no kept index before a refresh");
+
     CoreUpdater updater;
     check(!core_updater_init(&updater, "multitap-test", "http://example.invalid", false, TEST_KEYS, 1, "test-target",
                              cores.c_str(), (g_scratch + "/work").c_str()),
@@ -104,6 +108,9 @@ int main(int argc, char** argv)
     wait_idle(&updater);
     check(!updater.message_is_error, "refresh ok");
     check(updater.index.entries.size() == 2, "two entries");
+    check(core_updater_load_kept_index(&kept, cores.c_str(), "test-target") && kept.entries.size() == 2,
+          "the index is kept in the cores folder");
+    check(!core_updater_load_kept_index(&kept, cores.c_str(), "other-target"), "a kept index for another target: none");
     int32_t fake    = find(&updater, "Fake");
     int32_t nonfree = find(&updater, "Nonfree");
     check(fake == 0 && nonfree == 1, "sorted by name");
