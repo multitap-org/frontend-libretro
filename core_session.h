@@ -213,6 +213,10 @@ struct StateThumbnail
     ViewportCrop crop   = {};
     uint32_t     width  = 0;   // 0 = no thumbnail
     uint32_t     height = 0;
+    // The cropped frame as it is, not scaled (`width` / `height` only say
+    // there is one): for a picture the frontend scales itself, sharp, to
+    // the aspect it recorded (piccolo's CONTINUE card).
+    bool         native = false;
 };
 
 // What a slot holds, for a slot picker.
@@ -230,6 +234,11 @@ struct StateSlotInfo
 // it never shows another state's picture.
 bool core_session_save_state(CoreSession* session, const StateThumbnail* thumbnail);
 bool core_session_load_state(CoreSession* session);
+
+// The core's last frame alone, as a StateThumbnail, written to `path` (PNG):
+// a picture of the game without a state (a core that can't save them).
+// False (logged) if nothing runs, there's no frame or it couldn't be written.
+bool core_session_save_picture(const CoreSession* session, const StateThumbnail* thumbnail, const char* path);
 
 // What slot `slot` holds for the running game. False if nothing runs
 // or there's no states folder.
