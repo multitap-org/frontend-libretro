@@ -147,13 +147,6 @@ void core_updater_cancel(CoreUpdater* updater);
 // Once per frame: picks up a finished task (new index, installed core).
 void core_updater_poll(CoreUpdater* updater);
 
-// The last index that checked out, as a refresh keeps it in `cores_dir`
-// (index.cfg): what a core is (its name, its systems) without downloading,
-// before the downloader is even set up. Only for showing: installs use the
-// index of this run. False when no refresh has kept one (or it is for
-// another target).
-bool core_updater_load_kept_index(CoreIndex* index, const char* cores_dir, const char* target);
-
 // Bytes of the current download (0, 0 when none).
 void core_updater_progress(CoreUpdater* updater, int64_t* received, int64_t* total);
 

@@ -25,7 +25,6 @@ constexpr int64_t SIGNATURE_MAX_BYTES = 4096;
 
 static const char* const INSTALLED_FILE   = "installed.cfg";
 static const char* const INSTALLED_HEADER = "Cores installed by the core downloader (core_updater). Written by the program.";
-static const char* const KEPT_INDEX_FILE  = "index.cfg";
 
 bool core_updater_available()
 {
@@ -155,14 +154,6 @@ static void worker_refresh(CoreUpdaterWorker* worker)
     else
     {
         worker->ok = true;
-        // Kept for what a core is (its name, its systems) when the
-        // downloader hasn't run: core_updater_load_kept_index.
-        // Not kept (a read-only folder): only the names and systems are missed.
-        std::string kept = worker->cores_dir + "/" + KEPT_INDEX_FILE;
-        if (host_fs_make_directories(worker->cores_dir.c_str()))
-        {
-            host_fs_write_file(kept.c_str(), index_data, index_size);
-        }
         char text[256];
         std::snprintf(text, sizeof(text), "%d cores available (%s)",
                       static_cast<int>(worker->index.entries.size()), worker->index.release.c_str());
@@ -494,21 +485,6 @@ void core_updater_poll(CoreUpdater* updater)
     }
     host_log(worker->ok ? LogLevel::info : LogLevel::warning, "core_updater: %s", updater->message.c_str());
     updater->state = CoreUpdaterState::idle;
-}
-
-bool core_updater_load_kept_index(CoreIndex* index, const char* cores_dir, const char* target)
-{
-    *index = {};
-    std::string kept = std::string(cores_dir) + "/" + KEPT_INDEX_FILE;
-    uint8_t* data = nullptr;
-    size_t   size = 0;
-    if (!host_fs_read_file(kept.c_str(), &data, &size))
-    {
-        return false;
-    }
-    bool ok = core_index_parse(index, reinterpret_cast<const char*>(data), size, target);
-    delete[] data;
-    return ok;
 }
 
 void core_updater_progress(CoreUpdater* updater, int64_t* received, int64_t* total)
