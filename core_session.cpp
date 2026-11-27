@@ -755,7 +755,8 @@ void core_session_wait(const CoreSession* session)
 // Savestates
 // ---------------------------------------------------------------------------
 
-// The core's last frame, cropped and scaled as in StateThumbnail, as a PNG.
+// The core's last frame, cropped and scaled (or not: native) as in
+// StateThumbnail, as a PNG.
 static bool save_thumbnail(const LibretroVideoFrame* video, const StateThumbnail* thumbnail, const char* path)
 {
     if (thumbnail == nullptr || thumbnail->width == 0 || thumbnail->height == 0 || video->pixels == nullptr ||
@@ -805,12 +806,21 @@ static bool save_thumbnail(const LibretroVideoFrame* video, const StateThumbnail
     if (frame != nullptr && cropped != nullptr)
     {
         SDL_Rect source = {static_cast<int>(left), static_cast<int>(top), static_cast<int>(width), static_cast<int>(height)};
+        SDL_Surface* written = nullptr;
         if (SDL_BlitSurface(frame, &source, cropped, nullptr))
         {
-            scaled = SDL_ScaleSurface(cropped, static_cast<int>(thumbnail->width), static_cast<int>(thumbnail->height),
-                                      SDL_SCALEMODE_LINEAR);
+            if (thumbnail->native)
+            {
+                written = cropped;
+            }
+            else
+            {
+                scaled = SDL_ScaleSurface(cropped, static_cast<int>(thumbnail->width),
+                                          static_cast<int>(thumbnail->height), SDL_SCALEMODE_LINEAR);
+                written = scaled;
+            }
         }
-        ok = scaled != nullptr && SDL_SavePNG(scaled, path);
+        ok = written != nullptr && SDL_SavePNG(written, path);
     }
     if (!ok)
     {
@@ -844,6 +854,15 @@ bool core_session_save_state(CoreSession* session, const StateThumbnail* thumbna
     }
     set_message(session, "Saved state slot %u", session->state_slot);
     return true;
+}
+
+bool core_session_save_picture(const CoreSession* session, const StateThumbnail* thumbnail, const char* path)
+{
+    if (!core_session_running(session))
+    {
+        return false;
+    }
+    return save_thumbnail(&session->host->video, thumbnail, path);
 }
 
 bool core_session_slot_info(const CoreSession* session, uint32_t slot, StateSlotInfo* info)
